@@ -1,7 +1,7 @@
 ; ============================================================================
 ; AppleMouse II + ThunderClock Plus combined card ROM
 ; Mike Wiese
-; 2026-06-21
+; 2026-06-22
 ; ============================================================================
 ;
 ; A single de-banked ($C800 Thunderclock-style) ROM image that answers to BOTH
@@ -19,10 +19,10 @@
 ;      ('C' = clock, 'M' = mouse):
 ;        * PR#n inits MC_MODE = clock. The clock defaults to Mountain
 ;          Hardware Clock format, subsequent IN#n returns the time string in INBUF.
-;        * Printing $00 or $01 selects mouse mode; subsequent IN#n returns
+;        * Printing CHR$(1) selects mouse mode; subsequent IN#n returns
 ;          the formatted "+xxxxx,+yyyyy,+st" mouse position string in INBUF.
-;        * Any other output character selects clock mode, so the clock's WMODE
-;          and RMODE can be set using the usual characters.
+;        * The clock's WMODE and RMODE can be set using the usual characters,
+;          which also selects clock mode.
 ;        * CR is handled by both without switching modes: the mouse
 ;          eats CRs, and the clock needs CR to terminate a "!..." time-set.
 ;
@@ -183,7 +183,7 @@ MSLOT           = $07F8
 ;   $Cn06 = $70
 
     php                         ; $08 = clock
-    nop
+    sei
     plp                         ; $28 = clock
     bvc TO_MAIN                 ; $xx $58 = clock  ($Cn5D relay -> MAIN)
     sec                         ; $38 = mouse
@@ -694,12 +694,10 @@ B4_FN1:                         ; X is still $Cn from COMMON's SLOTXY
 MOUSE_OUT01:
     and #MOUSE_ENABLED          ; only keep "mouse is on" bit
     sta MOUSE_MODE,x
-    lsr                         ; bit 0 (mouse is on) -> carry
+    beq B4_26                   ; turn mouse off using CMD_SET with A = 0
     lda #'M'
-    sta MC_MODE,x               ; set MC_MODE to mouse mode
-    lda #CMD_TRANSPARENT        ; A = $80
-    bcs B4_26                   ; mouse on = 1 -> keep CMD_TRANSPARENT ($80)
-    asl                         ; mouse on = 0 -> A = CMD_SET mouse off ($00)
+    sta MC_MODE,x               ; set MC_MODE to mouse mode only when turning mouse ON
+    lda #CMD_TRANSPARENT        ; turn mouse on using CMD_TRANSPARENT
 B4_26:
     jsr SEND_MCU_CMD            ; A = command byte: send it to the MCU
 B4_85:
@@ -713,9 +711,9 @@ B4_FN2:
     pla                         ; discard the char SAVE_STATE pushed
     lda MC_MODE,x
     cmp #'M'                    ; are we in mouse mode ?
-    beq @MOUSE_IN2
+    beq MOUSE_IN2
     jmp READ_TIME_SKIP
-@MOUSE_IN2:
+MOUSE_IN2:
     lda MOUSE_MODE,x
     and #MOUSE_ENABLED          ; is mouse on (mode bit 0)?
     bne B4_54
@@ -1114,16 +1112,21 @@ CLK_W_CHAR_SKIP:
     lda CLOCK_WMODE,x
     cmp #$21                    ; '!' set time mode?
     beq SETTIMDIG               ; yes -> SETTIMDIG pulls the char back
+    pla                         ; balance stack
+    
+; --- else, any other character ends up here ---
 
-; --- else assume '*' BSR duration mode: update CLOCK_BSRDUR and enter BSR command mode ---
-   pla                          ; restore duration code character
-                                ; BSR code was here ... keeping the side effect of setting WMODE
-   lda #$5E                     ; -> BSR command mode
-   bne SETWMODE                 ; always
+; ... original BSR/X-10 code deleted ...
+
+    lda #$5E                    ; back to BSR command mode
+    sta CLOCK_WMODE,x
+                                ; but leave MC_MODE alone
+    bne FINALIZE                ; always
 
 ; --- SETRMODE: store character as format selector ---
 SETRMODE:
     sta CLOCK_RMODE,x           ; read mode = '%','&','<','>','#', etc.
+SMCOMMON:
     lda #'C'
     sta MC_MODE,x               ; set MC clock mode
                                 ; fall thru
@@ -1155,9 +1158,7 @@ SETTIMEMD:
 ; --- SETWMODE: store new write mode ---
 SETWMODE:
     sta CLOCK_WMODE,x           ; CLOCK_WMODE = new mode
-    lda #'C'
-    sta MC_MODE,x               ; set MC clock mode
-    bne FINALIZE                ; always
+    bne SMCOMMON
 
 ; --- SETRATE: set interrupt rate ---
 SETRATE:
@@ -1527,8 +1528,7 @@ LATEST_YEAR_TABLE:
 
 Credits:
     .byte $CD,$EF,$F5,$F3,$E5,$C3,$EC,$EF,$E3,$EB,$8D               ; "MouseClock",CR
-    .byte $CD,$E9,$EB,$E5,$A0,$D7,$E9,$E5,$F3,$E5,$8D               ; "Mike Wiese",CR
-    .byte $B2,$B0,$B2,$B6,$AD,$B0,$B6,$AD,$B2,$B1,$8D               ; "2026-06-21",CR
+    .byte $B2,$B0,$B2,$B6,$AD,$B0,$B6,$AD,$B2,$B2,$8D               ; "2026-06-22",CR
 CreditsEnd:
 CRED_LEN = CreditsEnd - Credits
     .res  $CFFF - *, $FF
