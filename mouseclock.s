@@ -69,11 +69,11 @@ CLOCK_RMODE     = $05F8-$C0
 ; CLOCK_LCNT1      = $06F8-$C0
 ; CLOCK_LCNT2      = $0778-$C0
 CLOCK_IRQEN2    = $07F8-$C0
-; clock temporaries moved to INBUF $02Cx so they will not overwrite mouse state
-CLOCK_DOUT      = $0200         ; + $Cn
-CLOCK_LCNT1     = $0201         ; + $Cn
-CLOCK_LCNT2     = $0202         ; + $Cn
-CLOCK_TENS      = $0203         ; + $Cn
+; clock temporaries moved to INBUF so they will not overwrite mouse state
+CLOCK_DOUT      = $02C0
+CLOCK_LCNT1     = $02C1
+CLOCK_LCNT2     = $02C2
+CLOCK_TENS      = $02C3
 
 ; ---- mouse clock combo view (address,X where X = slot $Cn) ----
 MC_MODE         = $0678-$C0     ; 'C' = clock mode, 'M' = mouse mode
@@ -164,11 +164,6 @@ MSLOT           = $07F8
 
     .setcpu "6502"
 
-; ==================================================================
-; Slot-ROM page ($C800, mirrored at $Cn00)
-; ==================================================================
-    .org $C800
-
 ; To be recognized as a mouse need (Mouse Technical Note #5)
 ;   $Cn05 = $38  Pascal ID byte
 ;   $Cn07 = $18  Pascal ID byte
@@ -182,22 +177,28 @@ MSLOT           = $07F8
 ;   $Cn04 = $58
 ;   $Cn06 = $70
 
+; ==================================================================
+; Slot-ROM page ($C800, mirrored at $Cn00)
+; ==================================================================
+    .org $C800
+
     php                         ; $08 = clock
     sei
     plp                         ; $28 = clock
+; usually V=0 but either way will end up at MAIN
     bvc TO_MAIN                 ; $xx $58 = clock  ($Cn5D relay -> MAIN)
     sec                         ; $38 = mouse
     bvs MAIN                    ; $70 $18 = clock mouse
 
 ; ------------------------------------------------------------------
-; $Cn08  PRODOS_READ_ENTRY
+; $Cn08  PRODOS_READ_ENTRY, aka RDTCP
 ; ProDOS requires the clock read entry point to be at $Cn08
 ; ------------------------------------------------------------------
 PRODOS_READ_ENTRY:
     clc
     bcc PRODOS_READ
 ; ------------------------------------------------------------------
-; $Cn0B  PRODOS_WRITE_ENTRY
+; $Cn0B  PRODOS_WRITE_ENTRY, aka WTTCP
 ; ProDOS requires the clock write entry point to be at $Cn0B
 ; ------------------------------------------------------------------
 PRODOS_WRITE_ENTRY:
@@ -216,29 +217,27 @@ PRODOS_WRITE_ENTRY:
     .byte <InitMouse
     .byte <MouseRWMemory
     .byte <MouseCredits
-    .byte <MouseSetVBLData
+    .byte <MouseSetVBLData      ; aka TimeData in Mouse TN #2
     .byte <MouseSetVBLFrames
     .byte <MouseSetConfig
     .byte <MouseAckIRQ
 
 ; ==================================================================
-; MAIN ($Cn20) -- PR#n / IN#n path
+; MAIN must be at $Cn20, the main entry does "bvs $18" to here
+; PR#n / IN#n path
 ; ==================================================================
 MAIN:
     pha                         ; save entry A
     lda #<(T_B4F0-1)
 
 ; ==================================================================
-; SAVE_STATE -- full register save for the I/O-hook / firmware entry points
-; (MAIN, MC_IN, MC_OUT, PRODOS_READ_ENTRY, PRODOS_WRITE_ENTRY). Those entries 
-; must not clobber any register before saving it, so they start with:
-;   pha (entry A)
-;   lda #<(trampoline-1)
-;   bne SAVE_STATE
+; SAVE_STATE -- register save for the I/O-hook / clock firmware entry points
+; (MAIN, MC_IN, MC_OUT, PRODOS_READ_ENTRY, PRODOS_WRITE_ENTRY). Those entries
+; all save A with PHA, and then LDA the trampoline offset before branching here.
 ;
-; SAVE_STATE pushes P, the trampoline offset (in A), Y and X, then reads the
-; offset and entry A back into Y and A via a stack walk that leaves the saved
-; frame on the stack. The 5-byte frame RESTORE_STATE consumes is, top->bottom:
+; SAVE_STATE pushes P, the trampoline offset, Y and X, then reads the
+; offset and entry A back into Y and A via a stack walk, leaving the saved
+; frame on the stack. The 5-byte frame is, top->bottom:
 ;     X_entry, Y_entry, offset, P_entry, A_entry
 ; Finally it pushes entry A once more as the "char" on top of that frame, like
 ; the original mouse/clock firmware, so the workers can just PLA it; then falls
@@ -246,13 +245,13 @@ MAIN:
 ; ==================================================================
 SAVE_STATE:
     php                         ; save processor status
-    sei                         ; disable interrupts
+    sei                         ; disable interrupts for the entire call, restored in RESTORE_STATE
     pha                         ; save A (= trampoline offset)
     tya
     pha                         ; save Y
     txa
     pha                         ; save X
-    tsx                         ; peek entry A + offset, leaving the frame intact
+    tsx                         ; recover entry A + offset, leaving the frame intact
     pla                         ; skip over saved X
     pla                         ; skip over saved Y
     pla                         ; pop saved trampoline offset
@@ -266,8 +265,7 @@ SAVE_STATE:
 ; ==================================================================
 ; COMMON -- shared entry epilogue. Entered two ways: the dispatch stubs branch
 ; here with the trampoline offset in Y and A = entry A; SAVE_STATE falls in with
-; the same register setup (plus the saved frame on the stack). Runs only in the
-; always-mapped slot-ROM window.
+; the same register setup (plus the saved frame on the stack).
 ; ==================================================================
 COMMON:
     php
@@ -1178,26 +1176,26 @@ SETTIMDIG:
     beq LC8F4
     lda #10
 LC8F4:
-    sta CLOCK_TENS,x            ; CLOCK_TENS = 0 if data-out was 0, else 10
+    sta CLOCK_TENS              ; CLOCK_TENS = 0 if data-out was 0, else 10
     clc
     bcc FINALIZE                ; always
 COMMITTIME:
     jsr CLK_SHIFT               ; read out 1st nibble: month ones digit
-    adc CLOCK_TENS,x            ; add month tens value
+    adc CLOCK_TENS              ; add month tens value
     pha                         ; push hexadecimal month nibble
     lda #$09
-    sta CLOCK_LCNT1,x           ; CLOCK_LCNT1 = 9
+    sta CLOCK_LCNT1             ; CLOCK_LCNT1 = 9
 LC906:
     jsr CLK_SHIFT               ; read out remaining 9 nibbles
     pha
-    dec CLOCK_LCNT1,x
+    dec CLOCK_LCNT1  
     bne LC906
     lda #$0A
-    sta CLOCK_LCNT1,x           ; CLOCK_LCNT1 = 10
+    sta CLOCK_LCNT1             ; CLOCK_LCNT1 = 10
 LC914:
     pla
     jsr CLK_SHIFT
-    dec CLOCK_LCNT1,x
+    dec CLOCK_LCNT1  
     bne LC914
     lda #RTC_TIME_SET
     jsr RTC_CMD                 ; copy shift register data to the time counter
@@ -1214,7 +1212,7 @@ READ_TIME_SKIP:
     lda #RTC_SHIFT
     jsr RTC_CMD                 ; enter shift mode
     lda #$09
-    sta CLOCK_LCNT1,x           ; CLOCK_LCNT1 = 9
+    sta CLOCK_LCNT1             ; CLOCK_LCNT1 = 9
 RDNIBBLE:
     jsr CLK_SHIFT
     cmp #$0A                    ; valid BCD?
@@ -1222,7 +1220,7 @@ RDNIBBLE:
     lda #$00                    ; clamp invalid nibble to 0
 LC969:
     pha                         ; push nibble
-    dec CLOCK_LCNT1,x
+    dec CLOCK_LCNT1  
     bne RDNIBBLE
     jsr CLK_SHIFT
     cmp #$0D
@@ -1444,13 +1442,13 @@ STBDL1:
 CLK_SHIFT:
     pha                         ; save data-in
     lda #4
-    sta CLOCK_LCNT2,x           ; 4 bits
+    sta CLOCK_LCNT2             ; 4 bits
     lda #0
-    sta CLOCK_DOUT,x            ; CLOCK_DOUT = 0
+    sta CLOCK_DOUT              ; CLOCK_DOUT = 0
 SHLOOP:
     lda RTC_CONTROL,y           ; get DATA OUT bit in bit 7
     asl                         ; DATA OUT bit -> carry
-    ror CLOCK_DOUT,x            ; rotate into CLOCK_DOUT
+    ror CLOCK_DOUT              ; rotate into CLOCK_DOUT
     pla
     pha                         ; get & resave data-in
     and #1                      ; bit 0 only
@@ -1462,10 +1460,10 @@ SHLOOP:
     pla
     ror                         ; shift data-in for next bit
     pha
-    dec CLOCK_LCNT2,x           ; done 4 bits?
+    dec CLOCK_LCNT2             ; done 4 bits?
     bne SHLOOP
     pla                         ; adjust stack
-    lda CLOCK_DOUT,x
+    lda CLOCK_DOUT  
     clc
 ROR4:
     ror
