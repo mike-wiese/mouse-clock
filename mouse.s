@@ -1,7 +1,7 @@
 ; ============================================================
 ; Apple II Mouse Interface Card ROM  341-0270-c.4b
 ; Disassembly by Mike Wiese
-; 2026-07-01
+; 2026-07-03
 ; ============================================================
 ;
 ; How the card works
@@ -369,7 +369,10 @@ TimeData:
         ora #CMD_TIMEDATA
         bne B0_8E               ; always
         .res 2, $FF
-B0_5B:  lda PIA_CRB,y
+B0_BANK_SWITCH:
+        ; After a reset, DDRB must be configured before any bank switching.
+        ; That is done here, at the start of processing every command.
+        lda PIA_CRB,y
         and #SELECT_DDR
         sta PIA_CRB,y           ; access DDRB
         lda #$3E
@@ -377,7 +380,6 @@ B0_5B:  lda PIA_CRB,y
         lda PIA_CRB,y
         ora #SELECT_PR
         sta PIA_CRB,y           ; access PB
-B0_BANK_SWITCH:
         lda PIA_PB,y
         and #$C1                ; 1100 0001: clear bits 1–5
         ora ROM_BANK,x          ; merge in target bank
@@ -420,7 +422,7 @@ B0_8E:  sta MOUSE_CMD,x
 B0_93:  sta ROM_BANK,x
         lda #$01                ; function code 1
 B0_98:  pha
-        bne B0_5B               ; always
+        bne B0_BANK_SWITCH      ; always
 ; ==================================================================
 ; ReadMouse
 ; Reads the current mouse X-Y position and status into
@@ -449,7 +451,7 @@ B0_A6:  sta MOUSE_CMD,x
 B0_AB:  sta ROM_BANK,x
         lda #$00                ; function code 0
         pha
-        beq B0_5B               ; always
+        beq B0_BANK_SWITCH      ; always
 ; ==================================================================
 ; SetMouse
 ; Sets the mouse mode to the value in the accumulator.
@@ -754,7 +756,8 @@ B2_30:  lda RDVBLBAR
         lda #<B2_80-1           ; lo byte for the RTS jump
         bne B2_39               ; always; branch to B2_39; returns to B2_80
 B2_39:  pha                     ; push A (= RTS jump lo byte: $11, $7F, or $E3)
-        lda #CMD_INITMOUSE      ; reset MCU state + restart its frame timer; after a
+        lda #$50                ; the MCU is waiting for us to send a byte (the value is ignored),
+                                ; once received the MCU restarts its frame timer; after a
                                 ; VBL sync this phase-locks the mouse VBL to the Apple II VBL
         pha
         lda #BANK6
@@ -1305,15 +1308,15 @@ B5_CC:  rts
 ; BANK 6: ReadMouse, DiagMouse, InitMouse, MOUSE_OUT, MOUSE_IN
 ;
 ; Three entry points via function code:
-;   code=0 (B6_FN0): send command byte (already on the stack) to the MCU;
+;   code=0 (B6_FN0): send first byte (already on the stack) to the MCU;
 ;   code=1 (B6_FN1): read a single byte from the MCU
 ;   code=2 (B6_FN2): ReadMouse: if mouse is on, send CMD_READMOUSE and read 5
 ;                    bytes (XLO,XHI,YLO,YHI,STATUS) into the screen holes
 ; ==================================================================
         .org $0600
 
-B6_FN0: clv                     ; clear V: send command, no response
-        bvc B6_SEND_CMD         ; always
+B6_FN0: clv                     ; clear V: send byte, no response
+        bvc B6_SEND_BYTE        ; always
 B6_FN2: lda MOUSE_MODE,x        ; is mouse on (mode bit 0)?
         and #MOUSE_ENABLED
         beq B6_51               ; no: switch to bank 0 and return
@@ -1323,7 +1326,7 @@ B6_FN2: lda MOUSE_MODE,x        ; is mouse on (mode bit 0)?
         sta MOUSE_CMD,x         ; using MOUSE_CMD for the byte counter
         lda #$7F
         adc #$01                ; set V=1: read the 5 byte response
-B6_SEND_CMD:
+B6_SEND_BYTE:
 B6_WAIT_WRITE_ACK_CLR:
         lda PIA_PB,y            ; wait for MCU to clear WRITE_ACK (PB7=0)
         bmi B6_WAIT_WRITE_ACK_CLR

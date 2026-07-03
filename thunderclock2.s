@@ -1,7 +1,7 @@
 ; ============================================================================
 ; ThunderClock Plus - Apple II Peripheral Card ROM
 ; Mike Wiese
-; 2026-07-01
+; 2026-07-03
 ; Based on REV 1.3 + patches the ProDOS clock driver year table
 ; ============================================================================
 ;
@@ -17,7 +17,7 @@
 ;
 ; HARDWARE:
 ;   NEC uPD1990AC real-time clock/calendar chip.
-;   Optional BSR/X-10 ultrasonic RTC_TRANSDUCER.
+;   Optional BSR/X-10 ultrasonic transducer.
 ;
 ; CONTROL REGISTER  ($C08x,Y where Y = slot# * $10)
 ;
@@ -27,7 +27,7 @@
 ;      bit  2   = uPD1990AC STB
 ;      bit  1   = uPD1990AC CLK
 ;      bit  0   = uPD1990AC DATA IN
-;      bit  5   = (also) BSR/X-10 ultrasonic RTC_TRANSDUCER
+;      bit  5   = (also) BSR/X-10 ultrasonic transducer
 ;
 ;   Read:
 ;      bit  7   = uPD1990AC DATA OUT
@@ -56,7 +56,8 @@ CLOCK_IRQEN2    = $07F8-$C0     ; + $Cn   interrupt enable byte 2, also used as 
 RTC_CONTROL     = $C080
 
 ; ---- RTC commands in bits 5:3 ------------------------------
-RTC_SHIFT       = %00001000     ; $08
+RTC_REG_HOLD    = %00000000     ; $00  register hold
+RTC_REG_SHIFT   = %00001000     ; $08  register shift
 RTC_TIME_SET    = %00010000     ; $10
 RTC_TIME_READ   = %00011000     ; $18
 RTC_TP_64HZ     = %00100000     ; $20
@@ -64,7 +65,7 @@ RTC_TP_256HZ    = %00101000     ; $28
 RTC_TP_2048HZ   = %00110000     ; $30
 
 ; ---- RTC bit masks -----------------------------------------
-RTC_CLK         = %00000010     ; $02
+RTC_CLOCK       = %00000010     ; $02
 RTC_STROBE      = %00000100     ; $04
 RTC_TRANSDUCER  = %00100000     ; $20
 RTC_IRQ_ENABLE  = %01000000     ; $40
@@ -292,7 +293,7 @@ SETRMODE:
 SETTIMEMD:
         lda #RTC_TP_64HZ
         jsr RTC_CMD             ; set 64 Hz mode (bug?)
-        lda #RTC_SHIFT
+        lda #RTC_REG_SHIFT
         jsr RTC_CMD             ; enter shift mode
         lda #$21                ; write mode = '!'
 
@@ -438,7 +439,7 @@ READ_TIME:
         pla                     ; discard saved character
         lda #RTC_TIME_READ
         jsr RTC_CMD             ; copy time counter data to the shift register
-        lda #RTC_SHIFT
+        lda #RTC_REG_SHIFT
         jsr RTC_CMD             ; enter shift mode
         lda #$09
         sta CLOCK_LCNT1,x       ; CLOCK_LCNT1 = 9
@@ -754,7 +755,7 @@ CLK_SHIFT:
         sta CLOCK_DOUT,x        ; CLOCK_DOUT = 0
 
 SHLOOP:
-; In RTC_SHIFT mode, the LSB of the shift register appears on DATA OUT, which is
+; In RTC_REG_SHIFT mode, the LSB of the shift register appears on DATA OUT, which is
 ; read via bit 7 of the control register
         lda RTC_CONTROL,y       ; get DATA OUT bit in bit 7
         asl                     ; DATA OUT bit -> carry
@@ -763,9 +764,9 @@ SHLOOP:
         pha                     ; get & resave data-in
         and #1                  ; bit 0 only
         sta RTC_CONTROL,y       ; write one bit of data to DATA IN
-        ora #RTC_CLK
+        ora #RTC_CLOCK
         sta RTC_CONTROL,y       ; raise CLK: clock the shift register
-        eor #RTC_CLK
+        eor #RTC_CLOCK
         sta RTC_CONTROL,y       ; lower CLK
         pla
         ror                     ; shift data-in for next bit
@@ -857,7 +858,7 @@ TDELAY_INNER:
 
 ; ============================================================================
 ; $CB69  CARRIER: Generate X ultrasonic carrier cycles
-; BSR/X-10 ultrasonic RTC_TRANSDUCER is connected to control register bit 5
+; BSR/X-10 ultrasonic transducer is connected to control register bit 5
 ; Does not affect the uPD1990AC since STB (bit 2) is low
 ; ============================================================================
 CARRIER:

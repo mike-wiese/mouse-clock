@@ -1,7 +1,7 @@
 ; ============================================================
 ; Apple II Mouse Interface Card ROM  --  non-banked variant
 ; Mike Wiese
-; 2026-07-01
+; 2026-07-03
 ; ============================================================
 ;
 ; This is a de-banked re-implementation of the AppleMouse II firmware.
@@ -470,7 +470,7 @@ Credits:
 ;   CLAMP_MAX_LO -> MCU address high byte
 ;   CLAMP_MIN_HI -> write: byte to store;  read: byte returned
 B1_FN1: lda MOUSE_CMD,x         ; send the command byte
-        jsr SEND_MCU_CMD        ; first byte: configure Port B + write
+        jsr WRITE_FIRST_BYTE    ; first byte: configure Port B + write
         lda CLAMP_MIN_LO        ; send the address low byte
         jsr WRITE_MCU_BYTE
         lda CLAMP_MAX_LO        ; send the address high byte
@@ -494,8 +494,8 @@ B1_READ:
 ; via RDVBLBAR; Apple II / II+ sync with the mouse-card PAL sync latch.
 ; ==================================================================
 B2_FN0: lda #CMD_INITMOUSE      ; call #1: CMD_INITMOUSE resets the MCU
-        jsr SEND_MCU_CMD
-        jsr B6_FN1              ; call #2: read a byte back (version probe)
+        jsr WRITE_FIRST_BYTE
+        jsr B6_FN1              ; call #2: read a byte back (version?)
         lda F8VERSION
         cmp #$06                ; IIe or later ($FBB3 = 6)?
         bne B2_HIRES_SYNC       ; no (II / II+): use the HIRES/PAL sync method
@@ -506,7 +506,7 @@ B2_2B:  lda RDVBLBAR
 B2_30:  lda RDVBLBAR
         bmi B2_30               ; wait for VBL low again (start of blanking)
         lda #CMD_INITMOUSE      ; call #3: restart the (now phase-locked) timer
-        jsr SEND_MCU_CMD
+        jsr WRITE_FIRST_BYTE
         clc                     ; EXIT_OK
         rts
 
@@ -566,7 +566,7 @@ B2_D7:  pla                     ; restore zp temps
         pla
         sta ZP_TEMP1
         lda #CMD_INITMOUSE      ; call #3: restart the (now phase-locked) timer
-        jsr SEND_MCU_CMD
+        jsr WRITE_FIRST_BYTE
         lda TEXT                ; restore the text + lo-res display
         lda LORES
         clc                     ; EXIT_OK
@@ -585,7 +585,7 @@ B3_FN0: lda MOUSE_CMD,x         ; ServeMouse needs a response read after the wri
 B3_0D:  clv                     ; V=0: no response read needed
 B3_SEND:
         lda MOUSE_CMD,x
-        jsr SEND_MCU_CMD        ; configure Port B + send the command (V preserved)
+        jsr WRITE_FIRST_BYTE    ; configure Port B + send the command (V preserved)
         bvs READ_MCU_RESPONSE   ; ServeMouse: read the interrupt-status byte
         lda MOUSE_CMD,x
         cmp #CMD_CLEARMOUSE     ; ClearMouse: also zero the position screen holes
@@ -635,7 +635,7 @@ B4_FN1: pla                     ; pop character
         lda #CMD_TRANSPARENT    ; A = $80
         bcs B4_26               ; mouse on = 1 -> keep CMD_TRANSPARENT ($80)
         asl                     ; mouse on = 0 -> A = CMD_SETMOUSE mouse off ($00)
-B4_26:  jsr SEND_MCU_CMD        ; A = command byte: send it to the MCU
+B4_26:  jsr WRITE_FIRST_BYTE        ; A = command byte: send it to the MCU
 B4_85:  jmp RESTORE_STATE
 B4_31:  cpx KSWH                ; is KSWH pointing to our slot?
         bne B4_FN1              ; no: (should not happen) handle output char
@@ -660,7 +660,7 @@ B4_54:                          ; entered from B4_FN2 with A = MOUSE_MODE & $01
 ;   sta MOUSE_MODE,x            ; unneeded: MOUSE_MODE is always read masked (AND #$01),
                                 ;   so its upper bits never matter
         lda #CMD_READMOUSE      ; send CMD_READMOUSE to the MCU
-        jsr SEND_MCU_CMD
+        jsr WRITE_FIRST_BYTE
         pla                     ; discard 4 saved regs, leave flags
         pla
         pla
@@ -775,13 +775,13 @@ B5_C8:  pla                     ; sign/separator
 ; B6: ReadMouse and single-byte MCU read
 ;   B6_FN2: ReadMouse -- send CMD_READMOUSE, read 5 bytes into the screen holes
 ;   B6_FN1: read one byte from the MCU into MOUSE_CMD. Port B is already
-;           configured by the SEND_MCU_CMD that began this command sequence.
+;           configured by the WRITE_FIRST_BYTE that began this command sequence.
 ; ==================================================================
 B6_FN2: lda MOUSE_MODE,x        ; ReadMouse
         and #MOUSE_ENABLED      ; is mouse on (mode bit 0)?
         beq B6_INACTIVE
         lda #CMD_READMOUSE
-        jsr SEND_MCU_CMD        ; configure Port B + send CMD_READMOUSE
+        jsr WRITE_FIRST_BYTE    ; configure Port B + send CMD_READMOUSE
         jsr READ_MCU_BYTE       ; read the 5-byte response into the screen holes
         sta MOUSE_XLO,x
         jsr READ_MCU_BYTE
@@ -876,7 +876,7 @@ B7_9C:  lda CLAMP_MIN_HI
         sta MOUSE_CMD,x
 WRITE_LOOP:                     ; bytes on the stack (command on top), count in MOUSE_CMD,x
         pla                     ; first byte = the command
-        jsr SEND_MCU_CMD        ; configure Port B + write it
+        jsr WRITE_FIRST_BYTE    ; configure Port B + write it
         dec MOUSE_CMD,x
         beq B7_DONE             ; command-only write
 B7_NEXT:
@@ -889,15 +889,17 @@ B7_DONE:
         rts
 
 ; ==================================================================
-; SEND_MCU_CMD / WRITE_MCU_BYTE -- write one byte to the MCU.
-; SEND_MCU_CMD configures the Port B handshake (the first byte of every
-; command), then falls into WRITE_MCU_BYTE. WRITE_MCU_BYTE assumes Port B is
-; already configured (the 2nd..Nth bytes of a multi-byte write). Both take
-; the byte in A and return via RTS, and neither disturbs the overflow flag
-; -- so a caller may set V beforehand to remember whether a response read
-; should follow.
+; WRITE_FIRST_BYTE / WRITE_MCU_BYTE -- write one byte to the MCU.
+; Port B's DDRB must be configured after a reset before any read or write to
+; the MCU. The protocol always starts with the Apple II sending a command byte,
+; so WRITE_FIRST_BYTE sets up DDRB, then falls into WRITE_MCU_BYTE. Because
+; it runs at the start of every write sequence, DDRB gets reconfigured more
+; often than strictly necessary, but this keeps the code simple.
+; WRITE_MCU_BYTE is used for the 2nd..Nth bytes of a multi-byte write. Both
+; take the byte in A and return via RTS, and neither disturbs the overflow flag,
+; so a caller may set V beforehand to remember whether a response read should follow.
 ; ==================================================================
-SEND_MCU_CMD:
+WRITE_FIRST_BYTE:
         pha                     ; save the byte
         lda PIA_CRB,y           ; configure Port B handshake outputs
         and #SELECT_DDR
@@ -935,7 +937,7 @@ WB_WAIT_ACK:
 
 ; ==================================================================
 ; READ_MCU_BYTE -- read one byte from the MCU and return it in A. Port B is
-; already configured (by the SEND_MCU_CMD that began the command sequence).
+; already configured (by the WRITE_FIRST_BYTE that began the command sequence).
 ; Does not disturb the overflow flag.
 ; ==================================================================
 READ_MCU_BYTE:

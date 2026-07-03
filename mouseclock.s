@@ -1,7 +1,7 @@
 ; ============================================================================
 ; AppleMouse II + ThunderClock Plus combined card ROM
 ; Mike Wiese
-; 2026-07-01
+; 2026-07-03
 ; ============================================================================
 ;
 ; A single de-banked ($C800 Thunderclock-style) ROM image that answers to BOTH
@@ -117,7 +117,8 @@ CMD_DIAGMOUSE   = $F0
 ; ============================================================
 RTC_CONTROL     = $C080
 ; ---- RTC commands in bits 5:3 ------------------------------
-RTC_SHIFT       = %00001000     ; $08
+RTC_REG_HOLD    = %00000000     ; $00  register hold
+RTC_REG_SHIFT   = %00001000     ; $08  register shift
 RTC_TIME_SET    = %00010000     ; $10
 RTC_TIME_READ   = %00011000     ; $18
 RTC_TP_64HZ     = %00100000     ; $20
@@ -125,7 +126,7 @@ RTC_TP_256HZ    = %00101000     ; $28
 RTC_TP_2048HZ   = %00110000     ; $30
 
 ; ---- RTC bit masks -----------------------------------------
-RTC_CLK         = %00000010     ; $02
+RTC_CLOCK       = %00000010     ; $02
 RTC_STROBE      = %00000100     ; $04
 RTC_TRANSDUCER  = %00100000     ; $20
 RTC_IRQ_ENABLE  = %01000000     ; $40
@@ -499,7 +500,7 @@ B1_13:  lda CreditsEnd-256,y    ; read character (negative-indexed off the end)
 
 ; ---- DiagMouse: read/write one byte of MCU memory ----------------
 B1_FN1: lda MOUSE_CMD,x         ; send the command byte
-        jsr SEND_MCU_CMD        ; first byte: configure Port B + write
+        jsr WRITE_FIRST_BYTE    ; first byte: configure Port B + write
         lda CLAMP_MIN_LO        ; send the address low byte
         jsr WRITE_MCU_BYTE
         lda CLAMP_MAX_LO        ; send the address high byte
@@ -521,7 +522,7 @@ B1_READ:
 ; B2: InitMouse
 ; ==================================================================
 B2_FN0: lda #CMD_INITMOUSE      ; call #1: CMD_INITMOUSE resets the MCU
-        jsr SEND_MCU_CMD
+        jsr WRITE_FIRST_BYTE
         jsr B6_FN1              ; call #2: read a byte back (version probe)
         lda F8VERSION
         cmp #$06                ; IIe or later ($FBB3 = 6)?
@@ -532,8 +533,8 @@ B2_2B:  lda RDVBLBAR
         bpl B2_2B               ; wait for VBL high (end of blanking)
 B2_30:  lda RDVBLBAR
         bmi B2_30               ; wait for VBL low again (start of blanking)
-        lda #CMD_INITMOUSE      ; call #3: restart the (now phase-locked) timer
-        jsr SEND_MCU_CMD
+        lda #$50                ; call #3: restart the (now phase-locked) timer
+        jsr WRITE_FIRST_BYTE
         clc                     ; EXIT_OK
         rts
 B2_HIRES_SYNC:
@@ -581,7 +582,7 @@ B2_D7:  pla                     ; restore zp temps
         pla
         sta ZP_TEMP1
         lda #CMD_INITMOUSE      ; call #3: restart the (now phase-locked) timer
-        jsr SEND_MCU_CMD
+        jsr WRITE_FIRST_BYTE
         lda TEXT                ; restore the text + lo-res display
         lda LORES
         clc                     ; EXIT_OK
@@ -599,7 +600,7 @@ B3_FN0: lda MOUSE_CMD,x         ; ServeMouse needs a response read after the wri
 B3_0D:  clv                     ; V=0: no response read needed
 B3_SEND:
         lda MOUSE_CMD,x
-        jsr SEND_MCU_CMD        ; configure Port B + send the command (V preserved)
+        jsr WRITE_FIRST_BYTE        ; configure Port B + send the command (V preserved)
         bvs READ_MCU_RESPONSE   ; ServeMouse: read the interrupt-status byte
         lda MOUSE_CMD,x
         cmp #CMD_CLEARMOUSE     ; ClearMouse: also zero the position screen holes
@@ -671,7 +672,7 @@ MOUSE_OUT01:
         lda #'M'
         sta MC_MODE,x           ; set MC_MODE to mouse mode only when turning mouse ON
         lda #CMD_TRANSPARENT    ; turn mouse on using CMD_TRANSPARENT
-B4_26:  jsr SEND_MCU_CMD        ; A = command byte: send it to the MCU
+B4_26:  jsr WRITE_FIRST_BYTE    ; A = command byte: send it to the MCU
 B4_85:  jmp RESTORE_STATE
 B4_31:  cpx KSWH                ; is KSWH pointing to our slot?
         bne B4_FN1              ; no: (should not happen) handle output char
@@ -696,7 +697,7 @@ MOUSE_IN2:
         sta MOUSE_STATUS,x
         bne B5_FN0              ; always
 B4_54:  lda #CMD_READMOUSE      ; send CMD_READMOUSE to the MCU
-        jsr SEND_MCU_CMD
+        jsr WRITE_FIRST_BYTE
         jsr READ_MCU_BYTE       ; read the 5-byte response into the screen holes (frame kept)
         sta MOUSE_XLO,x
         jsr READ_MCU_BYTE
@@ -836,7 +837,7 @@ B6_FN2: lda MOUSE_MODE,x        ; ReadMouse
         and #MOUSE_ENABLED      ; is mouse on (mode bit 0)?
         beq B6_INACTIVE
         lda #CMD_READMOUSE
-        jsr SEND_MCU_CMD        ; configure Port B + send CMD_READMOUSE
+        jsr WRITE_FIRST_BYTE        ; configure Port B + send CMD_READMOUSE
         jsr READ_MCU_BYTE       ; read the 5-byte response into the screen holes
         sta MOUSE_XLO,x
         jsr READ_MCU_BYTE
@@ -930,7 +931,7 @@ B7_9C:  lda CLAMP_MIN_HI
         sta MOUSE_CMD,x
 WRITE_LOOP:                     ; bytes on the stack (command on top), count in MOUSE_CMD,x
         pla                     ; first byte = the command
-        jsr SEND_MCU_CMD        ; configure Port B + write it
+        jsr WRITE_FIRST_BYTE    ; configure Port B + write it
         dec MOUSE_CMD,x
         beq B7_DONE             ; command-only write
 B7_NEXT:
@@ -943,9 +944,9 @@ B7_DONE:
         rts
 
 ; ==================================================================
-; SEND_MCU_CMD / WRITE_MCU_BYTE -- write one byte to the MCU.
+; WRITE_FIRST_BYTE / WRITE_MCU_BYTE -- write one byte to the MCU.
 ; ==================================================================
-SEND_MCU_CMD:
+WRITE_FIRST_BYTE:
         pha                     ; save the byte
         lda PIA_CRB,y           ; configure Port B handshake outputs
         and #SELECT_DDR
@@ -1100,7 +1101,7 @@ CLK_FIN_DONE:
 SETTIMEMD:
         lda #RTC_TP_64HZ
         jsr RTC_CMD             ; set 64 Hz mode (bug?)
-        lda #RTC_SHIFT
+        lda #RTC_REG_SHIFT
         jsr RTC_CMD             ; enter shift mode
         lda #$21                ; write mode = '!'
 
@@ -1157,7 +1158,7 @@ READ_TIME:                      ; clock CSW-read handler; returns the formatted 
 READ_TIME_SKIP:
         lda #RTC_TIME_READ
         jsr RTC_CMD             ; copy time counter data to the shift register
-        lda #RTC_SHIFT
+        lda #RTC_REG_SHIFT
         jsr RTC_CMD             ; enter shift mode
         lda #$09
         sta CLOCK_LCNT1         ; CLOCK_LCNT1 = 9
@@ -1385,9 +1386,9 @@ SHLOOP: lda RTC_CONTROL,y       ; get DATA OUT bit in bit 7
         pha                     ; get & resave data-in
         and #1                  ; bit 0 only
         sta RTC_CONTROL,y       ; write one bit of data to DATA IN
-        ora #RTC_CLK
+        ora #RTC_CLOCK
         sta RTC_CONTROL,y       ; raise CLK: clock the shift register
-        eor #RTC_CLK
+        eor #RTC_CLOCK
         sta RTC_CONTROL,y       ; lower CLK
         pla
         ror                     ; shift data-in for next bit
@@ -1455,7 +1456,7 @@ LATEST_YEAR_TABLE:
 
 Credits:
         .byte $CD,$EF,$F5,$F3,$E5,$C3,$EC,$EF,$E3,$EB,$8D  ; "MouseClock",CR
-        .byte $B2,$B0,$B2,$B6,$AD,$B0,$B7,$AD,$B0,$B1,$8D  ; "2026-07-01",CR
+        .byte $B2,$B0,$B2,$B6,$AD,$B0,$B7,$AD,$B0,$B3,$8D  ; "2026-07-03",CR
 CreditsEnd:
 CRED_LEN = CreditsEnd - Credits
         .res  $CFFF - *, $FF
