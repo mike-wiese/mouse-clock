@@ -1,13 +1,13 @@
 ; ============================================================
 ; Apple II Mouse Interface Card ROM  341-0270-c.4b
 ; Disassembly by Mike Wiese
-; 2026-07-03
+; 2026-07-07
 ; ============================================================
 ;
 ; How the card works
 ; -------------------
 ; Two processors are involved: the Apple II's own 6502 (running this slot
-; ROM), and an MC68705 MCU on the card (see mcu.s) that does the actual
+; ROM), and an MC68705 MCU on the card (see mousemcu.s) that does the actual
 ; mouse tracking. A 6821 PIA on the card bridges them: Port A is a
 ; bidirectional data bus to the MCU; Port B selects the active ROM bank
 ; and carries the REQ/ACK handshakes. The 2KB ROM is 8 banks of 256 bytes,
