@@ -1,7 +1,7 @@
 ; ============================================================
 ; Apple II Mouse Interface Card MC68705 firmware 341-0269.2b
 ; Disassembly by Mike Wiese
-; 2026-07-07
+; 2026-07-08
 ;
 ; Authors: Marks / MacDougall / MacKay / Bachman
 ; Apple Computer Inc. 1983
@@ -46,9 +46,9 @@ XHI             = $40
 YHI             = $41
 XLO             = $42
 YLO             = $43
-PORT_STATE      = $44
-NEW_STATE       = $45
-BUTTON_STATUS   = $46
+QUAD_STATE      = $44
+QUAD_CHANGED    = $45
+BUTTON_STATE    = $46   ; button state for CMD_READMOUSE (not used for button IRQ)
 XMIN_HI         = $47
 YMIN_HI         = $48
 XMIN_LO         = $49
@@ -65,12 +65,12 @@ SEED_HI         = $53
 SEED_DELTA_LO   = $54   ; 16-bit signed delta added to SEED (CMD_TIMEDATA bit 2)
 SEED_DELTA_HI   = $55
 FRAME_COUNTER   = $56   ; counts frames down to next IRQ; reloaded from FRAMES_PER_IRQ
-FRAMES_PER_IRQ  = $57   ; frame divider: fire the mouse IRQ once every N frames
-MOUSE_MODE      = $58   ; low 4 bits = mode (b0 on/off, b1 move IRQ, b2 btn IRQ, b3 VBL IRQ)
+FRAMES_PER_IRQ  = $57   ; fire the mouse IRQ once every N video frames
+MOUSE_MODE      = $58   ; low 4 bits = mode (b0 on/off, b1 move IRQ, b2 button IRQ, b3 VBL IRQ)
 CMD_BYTE        = $59
-MOVED_STATUS    = $5A
-MOUSE_MOVED     = $5B   ; mouse moved (bit 1) since last VBL tick; folded into INT_STATUS and cleared by TIMER_ISR
-INT_STATUS      = $5C   ; accumulated interrupt sources; returned/cleared by CMD_SERVEMOUSE
+MOVED_SINCE_READ = $5A  ; mouse moved (bit 5) since last CMD_READMOUSE
+MOVED_SINCE_VBL  = $5B  ; mouse moved (bit 1) since last VBL tick; folded into IRQ_SOURCES and cleared by TIMER_ISR
+IRQ_SOURCES     = $5C   ; accumulated interrupt sources; returned/cleared by CMD_SERVEMOUSE
 MOUSE_OPTIONS   = $5D   ; option bits set via CMD_OPTMOUSE
 DIAG_INSTR      = $5E
 DIAG_ADDR_HI    = $5F
@@ -83,8 +83,8 @@ DIAG_ARG        = $61
 ;
 ;   Command         val  params  result  payload / notes
 ;   CMD_SETMOUSE    $00  0       0       mode is in the command's low nibble
-;   CMD_READMOUSE   $10  0       5       send XLO,XHI,YLO,YHI,STATUS; clear MOVED_STATUS
-;   CMD_SERVEMOUSE  $20  0       1       send INT_STATUS byte; clear it
+;   CMD_READMOUSE   $10  0       5       send XLO,XHI,YLO,YHI,STATUS; clear MOVED_SINCE_READ
+;   CMD_SERVEMOUSE  $20  0       1       send IRQ_SOURCES byte; clear it
 ;   CMD_CLEARMOUSE  $30  0       0       zero position, button status, delta
 ;   CMD_POSMOUSE    $40  4       0       set XLO,XHI,YLO,YHI
 ;   CMD_INITMOUSE   $50  1       1       disable IRQ, reset, send $00 ACK, reinit
@@ -225,30 +225,30 @@ CMD_LOOP:
 
 STATE_CHECK:
         $0403  B6 01          lda PORTB                     ; read Port B
-        $0405  A4 0F          and #$0F                      ; keep low nibble (quadrature + button bits)
-        $0407  B8 44          eor PORT_STATE                ; XOR with saved state: non-zero = state changed
+        $0405  A4 0F          and #$0F                      ; keep low nibble (quadrature bits)
+        $0407  B8 44          eor QUAD_STATE                ; XOR with saved state: non-zero = state changed
         $0409  27 E8          beq CMD_LOOP                  ; no change: wait for next command
         $040B  01 58 5B       brclr 0, MOUSE_MODE,$0469     ; mouse off (mode bit 0 = 0) -> skip decode
-        $040E  B7 45          sta NEW_STATE                 ; save XOR-diff = changed bits
-        $0410  B8 44          eor PORT_STATE                ; A = diff XOR old = new state
-        $0412  B7 44          sta PORT_STATE                ; update saved Port B state
+        $040E  B7 45          sta QUAD_CHANGED              ; save XOR diff = changed bits
+        $0410  B8 44          eor QUAD_STATE                ; A = diff XOR old = new state
+        $0412  B7 44          sta QUAD_STATE                ; update saved state
         $0414  01 5D 08       brclr 0, MOUSE_OPTIONS,$041F  ; bit 0 clear? -> keep both edges (full res)
                                                             ;   set? fall through to rising-edge-only filter:
         $0417  A4 0A          and #$0A                      ; A = new level & clock mask (X0=PB1, Y1=PB3)
-        $0419  B4 45          and NEW_STATE                 ; & changed bits -> clock bits high AND changed
+        $0419  B4 45          and QUAD_CHANGED              ; & changed bits -> clock bits high AND changed
         $041B  27 4C          beq $0469                     ;   = clock RISING edges; none -> skip (no count)
-        $041D  B7 45          sta NEW_STATE                 ; NEW_STATE = clock rising edges only (IIc-style)
+        $041D  B7 45          sta QUAD_CHANGED              ; QUAD_CHANGED = clock rising edges only (IIc-style)
         $041F  A6 20          lda #$20
-        $0421  B7 5A          sta MOVED_STATUS
+        $0421  B7 5A          sta MOVED_SINCE_READ
         $0423  A6 02          lda #$02
-        $0425  B7 5B          sta MOUSE_MOVED
+        $0425  B7 5B          sta MOVED_SINCE_VBL
         $0427  AE 01          ldx #$01                      ; loop: X=1->Y axis, X=0->X axis
 
 QUAD_DECODE_loop:
-        $0429  B6 45          lda NEW_STATE                 ; CHANGED_BITS
+        $0429  B6 45          lda QUAD_CHANGED
         $042B  D4 00 9A       and QUAD_MASKS,X              ; clock mask: X0=$02 (X) or Y1=$08 (Y)
         $042E  27 36          beq $0466                     ; this axis clock bit unchanged: skip axis
-        $0430  B6 44          lda PORT_STATE                ; NEW PORT_STATE
+        $0430  B6 44          lda QUAD_STATE
         $0432  D4 00 9C       and QUAD_MASKS+2,X            ; direction mask: X1=$01 (X) or Y0=$04 (Y)
         $0435  27 18          beq QUAD_dec_path             ; direction line was 0: decrement
         $0437  E6 42          lda XLO,X
@@ -292,7 +292,7 @@ CMD_SETMOUSE:
 
 ; ------------------------------------------------------------
 ; CMD_READMOUSE — send XLO,XHI,YLO,YHI,STATUS to Apple II
-; Status byte = (BUTTON_STATUS & $C0) | MOVED_STATUS
+; Status byte = (BUTTON_STATE & $C0) | MOVED_SINCE_READ
 ; If MOUSE_OPTIONS bit 1 set: zero position after read
 ; ------------------------------------------------------------
 
@@ -326,17 +326,17 @@ CMD_READMOUSE:
         $04AF  B6 01          lda PORTB
         $04B1  A8 80          eor #$80                      ; button is active low, invert
         $04B3  48             lsla
-        $04B4  36 46          ror BUTTON_STATUS             ; shift current -> prev
-        $04B6  B6 46          lda BUTTON_STATUS
+        $04B4  36 46          ror BUTTON_STATE              ; shift current -> prev
+        $04B6  B6 46          lda BUTTON_STATE
         $04B8  A4 C0          and #$C0
-        $04BA  BA 5A          ora MOVED_STATUS
+        $04BA  BA 5A          ora MOVED_SINCE_READ
         $04BC  00 02 FD       brset 0, PORTC,*
         $04BF  B7 00          sta PORTA
         $04C1  14 02          bset 2, PORTC
         $04C3  01 02 FD       brclr 0, PORTC,*
         $04C6  15 02          bclr 2, PORTC
         $04C8  A6 00          lda #$00
-        $04CA  B7 5A          sta MOVED_STATUS
+        $04CA  B7 5A          sta MOVED_SINCE_READ
         $04CC  B7 04          sta DDRA
         $04CE  03 5D 08       brclr 1, MOUSE_OPTIONS,$04D9  ; bit 1 set? -> zero XHI/XLO/YHI/YLO
         $04D1  B7 40          sta XHI
@@ -346,21 +346,21 @@ CMD_READMOUSE:
         $04D9  CC 04 03       jmp STATE_CHECK
 
 ; ------------------------------------------------------------
-; CMD_SERVEMOUSE — send INT_STATUS ($5C) to Apple II; clear it
+; CMD_SERVEMOUSE — send IRQ_SOURCES ($5C) to Apple II; clear it
 ; ------------------------------------------------------------
 
 CMD_SERVEMOUSE:
         $04DC  1C 01          bset 6, PORTB
         $04DE  A6 FF          lda #$FF
         $04E0  B7 04          sta DDRA
-        $04E2  B6 5C          lda INT_STATUS
+        $04E2  B6 5C          lda IRQ_SOURCES
         $04E4  00 02 FD       brset 0, PORTC,*
         $04E7  B7 00          sta PORTA
         $04E9  14 02          bset 2, PORTC
         $04EB  01 02 FD       brclr 0, PORTC,*
         $04EE  15 02          bclr 2, PORTC
         $04F0  A6 00          lda #$00
-        $04F2  B7 5C          sta INT_STATUS
+        $04F2  B7 5C          sta IRQ_SOURCES
         $04F4  B7 04          sta DDRA
         $04F6  CC 04 03       jmp STATE_CHECK
 
@@ -371,8 +371,8 @@ CMD_SERVEMOUSE:
 ; ------------------------------------------------------------
 
 INIT_RAM:
-        $04F9  B7 5B          sta MOUSE_MOVED
-        $04FB  B7 5C          sta INT_STATUS
+        $04F9  B7 5B          sta MOVED_SINCE_VBL
+        $04FB  B7 5C          sta IRQ_SOURCES
 
 INIT_RAM2:
         $04FD  B7 58          sta MOUSE_MODE
@@ -391,12 +391,12 @@ INIT_RAM3:
         $0513  B7 4E          sta YMAX_LO
         $0515  B6 01          lda PORTB
         $0517  A4 0F          and #$0F
-        $0519  B7 44          sta PORT_STATE
+        $0519  B7 44          sta QUAD_STATE
 
 CMD_CLEARMOUSE:
         $051B  A6 00          lda #$00
-        $051D  B7 46          sta BUTTON_STATUS
-        $051F  B7 5A          sta MOVED_STATUS
+        $051D  B7 46          sta BUTTON_STATE
+        $051F  B7 5A          sta MOVED_SINCE_READ
         $0521  B7 40          sta XHI
         $0523  B7 42          sta XLO
         $0525  B7 41          sta YHI
@@ -417,7 +417,7 @@ CMD_POSMOUSE:
         $053B  CD 00 80       jsr RECV_BYTE
         $053E  B7 41          sta YHI
         $0540  A6 00          lda #$00
-        $0542  B7 5A          sta MOVED_STATUS
+        $0542  B7 5A          sta MOVED_SINCE_READ
         $0544  CC 04 03       jmp STATE_CHECK
 
 ; ------------------------------------------------------------
@@ -434,8 +434,8 @@ CMD_INITMOUSE:
         $0550  4C             inca
         $0551  B7 4F          sta TIMER_HI
         $0553  A6 00          lda #$00
-        $0555  B7 5B          sta MOUSE_MOVED
-        $0557  B7 5C          sta INT_STATUS
+        $0555  B7 5B          sta MOVED_SINCE_VBL
+        $0557  B7 5C          sta IRQ_SOURCES
         $0559  1C 01          bset 6, PORTB
         $055B  CD 00 8D       jsr SEND_BYTE
         $055E  03 02 FD       brclr 1, PORTC,*
@@ -483,7 +483,7 @@ CMD_HOMEMOUSE:
         $059C  B6 48          lda YMIN_HI
         $059E  B7 41          sta YHI
         $05A0  A6 00          lda #$00
-        $05A2  B7 5A          sta MOVED_STATUS
+        $05A2  B7 5A          sta MOVED_SINCE_READ
         $05A4  CC 04 03       jmp STATE_CHECK
 
 ; ------------------------------------------------------------
@@ -582,7 +582,7 @@ CMD_OPTMOUSE:
 
 ; ------------------------------------------------------------
 ; CMD_STARTTIMER ($C0) — acknowledge the mouse interrupt: clear pending status
-; (MOUSE_MOVED and INT_STATUS), deassert the IRQ (PB6 high), reload FRAME_COUNTER,
+; (MOVED_SINCE_VBL and IRQ_SOURCES), deassert the IRQ (PB6 high), reload FRAME_COUNTER,
 ; and ought to restart the frame timer, but due to a bug it only
 ; sets the low 8 bits of TIMER.
 ; ------------------------------------------------------------
@@ -591,8 +591,8 @@ CMD_STARTTIMER:
         $0626  9B             sei
         $0627  1D 09          bclr 6, TCR
         $0629  A6 00          lda #$00
-        $062B  B7 5B          sta MOUSE_MOVED
-        $062D  B7 5C          sta INT_STATUS
+        $062B  B7 5B          sta MOVED_SINCE_VBL
+        $062D  B7 5C          sta IRQ_SOURCES
         $062F  1C 01          bset 6, PORTB
         $0631  B6 57          lda FRAMES_PER_IRQ
         $0633  B7 56          sta FRAME_COUNTER
@@ -647,7 +647,7 @@ CMD_NOP:
 ;             and keeps counting, so consecutive zeros are 256 ticks apart.
 ; Maintains the frame timer; every FRAMES_PER_IRQ frames:
 ;   reads button state, builds the interrupt-condition status, asserts the
-;   Apple II IRQ if an enabled condition occurred, accumulates INT_STATUS
+;   Apple II IRQ if an enabled condition occurred, accumulates IRQ_SOURCES
 ; ════════════════════════════════════════════════════════════
 
 
@@ -680,7 +680,7 @@ TIMER_ISR:
         ; by subtracting -x. Let TIMER_NEG_DT be a signed 16 bit value, where
         ;    TIMER_NEG_DT = -TIMER_DT = 266 - ticks/frame
 
-        ; Subtracting from the running counter, not reloading it with a constant,
+        ; Adding to the running counter, not reloading it with a constant,
         ; is what makes the timer drift free no matter what the interrupt latency is.
 
         $0683  B6 08          lda TIMER                     ; TIMER -= TIMER_NEG_DT_LO (preserve TIMER's phase)
@@ -701,20 +701,20 @@ TIMER_ISR:
         $069E  20 04          bra $06A4
         $06A0  A6 08          lda #$08                      ; button up: VBL only (bit 3)
         $06A2  20 00          bra $06A4                     ; (branch to next instr, 2-byte NOP)
-        $06A4  BA 5B          ora MOUSE_MOVED               ; add movement bit (set in STATE_CHECK on move)
+        $06A4  BA 5B          ora MOVED_SINCE_VBL           ; add movement bit (set in STATE_CHECK on move)
         ; raise Apple II IRQ if an ENABLED interrupt condition is present
-        $06A6  00 58 04       brset 0, MOUSE_MODE,$06AD     ; mouse on? -> consider move/btn/VBL
+        $06A6  00 58 04       brset 0, MOUSE_MODE,$06AD     ; mouse on? -> consider move/button/VBL
         $06A9  A4 08          and #$08                      ; mouse off: consider VBL only (bit 3)
         $06AB  20 04          bra $06B1
-        $06AD  A4 0E          and #$0E                      ; mouse on: consider move/btn/VBL (bits 1-3)
+        $06AD  A4 0E          and #$0E                      ; mouse on: consider move/button/VBL (bits 1-3)
         $06AF  20 00          bra $06B1                     ; (branch to next instr, 2-byte NOP)
-        $06B1  B4 58          and MOUSE_MODE                ; mask vs mode IRQ-enable bits (b1 move,b2 btn,b3 VBL)
+        $06B1  B4 58          and MOUSE_MODE                ; mask vs mode IRQ-enable bits (b1 move, b2 button, b3 VBL)
         $06B3  27 02          beq $06B7                     ; nothing enabled occurred -> no interrupt
         $06B5  1D 01          bclr 6, PORTB                 ; assert Apple II IRQ (PB6 low, active-low)
-        $06B7  BA 5C          ora INT_STATUS                ; accumulate status into INT_STATUS (sent by ServeMouse)
-        $06B9  B7 5C          sta INT_STATUS
-        $06BB  A6 00          lda #$00                      ; clear movement flag (consumed)
-        $06BD  B7 5B          sta MOUSE_MOVED
+        $06B7  BA 5C          ora IRQ_SOURCES               ; accumulate status into IRQ_SOURCES (sent by ServeMouse)
+        $06B9  B7 5C          sta IRQ_SOURCES
+        $06BB  A6 00          lda #$00                      ; clear movement flag
+        $06BD  B7 5B          sta MOVED_SINCE_VBL
 
 TIMER_ISR_rti:
         $06BF  80             rti
