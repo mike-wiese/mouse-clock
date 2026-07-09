@@ -1,7 +1,7 @@
 ; ============================================================
 ; Apple II Mouse Interface Card ROM  --  non-banked variant
 ; Mike Wiese
-; 2026-07-03
+; 2026-07-10
 ; ============================================================
 ;
 ; This is a de-banked re-implementation of the AppleMouse II firmware.
@@ -50,16 +50,16 @@ CLAMP_MIN_HI    = $0578         ; hi byte of clamping minimum
 CLAMP_MAX_HI    = $05F8         ; hi byte of clamping maximum
 
 ; Slot #n screen holes at address,X where X = slot $Cn
-MOUSE_XLO       = $0478-$C0     ; + $Cn   X coord lo
-MOUSE_YLO       = $04F8-$C0     ; + $Cn   Y coord lo
-MOUSE_XHI       = $0578-$C0     ; + $Cn   X coord hi
-MOUSE_YHI       = $05F8-$C0     ; + $Cn   Y coord hi
+MOUSE_X_LO      = $0478-$C0     ; + $Cn   X coord lo
+MOUSE_Y_LO      = $04F8-$C0     ; + $Cn   Y coord lo
+MOUSE_X_HI      = $0578-$C0     ; + $Cn   X coord hi
+MOUSE_Y_HI      = $05F8-$C0     ; + $Cn   Y coord hi
 ; ($0678 + $Cn was ROM_BANK on the banked card -- now unused/free)
 MOUSE_CMD       = $06F8-$C0     ; + $Cn   command/temp byte
 MOUSE_STATUS    = $0778-$C0     ; + $Cn   status byte
 MOUSE_MODE      = $07F8-$C0     ; + $Cn   mode byte
 
-MOUSE_ENABLED   = %00000001     ; mouse mode bit 0 mask: mouse is on, aka active
+MOUSE_ON        = %00000001     ; mouse mode bit 0 mask: mouse is on, aka active
 
 ; ============================================================
 ; 6821 PIA registers (at $C08x,Y where Y = slot * $10)
@@ -337,7 +337,7 @@ TimeData:
         and #$0F
         ora #CMD_TIMEDATA
         bne SEND_B7             ; always ($9x != 0)
-SetVBLCnts:                     ; A = frames per IRQ
+SetVBLCnts:                     ; A = VBLs per IRQ
         pha                     ; push N (rate) -- left on the stack for B7
         lda #CMD_SETVBLCNTS
         bne SEND_B7             ; always
@@ -591,10 +591,10 @@ B3_SEND:
         cmp #CMD_CLEARMOUSE     ; ClearMouse: also zero the position screen holes
         bne B3_SUCCESS
         lda #$00
-        sta MOUSE_XHI,x
-        sta MOUSE_XLO,x
-        sta MOUSE_YHI,x
-        sta MOUSE_YLO,x
+        sta MOUSE_X_HI,x
+        sta MOUSE_X_LO,x
+        sta MOUSE_Y_HI,x
+        sta MOUSE_Y_LO,x
 B3_SUCCESS:
         clc                     ; EXIT_OK
         rts
@@ -629,7 +629,7 @@ B4_FN0: cpx CSWH                ; is CSWH pointing to our slot?
 B4_FN1: pla                     ; pop character
         cmp #$8D                ; CR ?
         beq B4_85               ; yes -> exit
-        and #MOUSE_ENABLED      ; only keep "mouse is on" bit
+        and #MOUSE_ON           ; only keep "mouse is on" bit
         sta MOUSE_MODE,x
         lsr                     ; bit 0 (mouse is on) -> carry
         lda #CMD_TRANSPARENT    ; A = $80
@@ -642,17 +642,17 @@ B4_31:  cpx KSWH                ; is KSWH pointing to our slot?
         lda #<MOUSE_IN
         sta KSWL                ; install MOUSE_IN hook, fall thru
 B4_FN2: lda MOUSE_MODE,x
-        and #MOUSE_ENABLED      ; is mouse on (mode bit 0)?
+        and #MOUSE_ON           ; is mouse on (mode bit 0)?
         bne B4_54
         pla                     ; off: discard 4 saved regs, leave flags
         pla
         pla
         pla
         lda #$00                ; zero the position screen holes
-        sta MOUSE_XLO,x
-        sta MOUSE_XHI,x
-        sta MOUSE_YLO,x
-        sta MOUSE_YHI,x
+        sta MOUSE_X_LO,x
+        sta MOUSE_X_HI,x
+        sta MOUSE_Y_LO,x
+        sta MOUSE_Y_HI,x
         lda #$C0                ; button down / was down (mouse off case)
         sta MOUSE_STATUS,x
         bne B5_FN0              ; always
@@ -666,13 +666,13 @@ B4_54:                          ; entered from B4_FN2 with A = MOUSE_MODE & $01
         pla
         pla
         jsr READ_MCU_BYTE       ; read the 5-byte response into the screen holes
-        sta MOUSE_XLO,x
+        sta MOUSE_X_LO,x
         jsr READ_MCU_BYTE
-        sta MOUSE_XHI,x
+        sta MOUSE_X_HI,x
         jsr READ_MCU_BYTE
-        sta MOUSE_YLO,x
+        sta MOUSE_Y_LO,x
         jsr READ_MCU_BYTE
-        sta MOUSE_YHI,x
+        sta MOUSE_Y_HI,x
         jsr READ_MCU_BYTE
         sta MOUSE_STATUS,x
 
@@ -681,15 +681,15 @@ B4_54:                          ; entered from B4_FN2 with A = MOUSE_MODE & $01
 ; B5_FN1 / B5_91 take their arguments in registers and RTS, so they are
 ; called with ordinary JSRs here.
 ; ==================================================================
-B5_FN0: ldy MOUSE_XLO,x         ; format X coordinate
-        lda MOUSE_XHI,x
+B5_FN0: ldy MOUSE_X_LO,x        ; format X coordinate
+        lda MOUSE_X_HI,x
         tax
         tya
         ldy #$05                ; digit position in INBUF for X
         jsr B5_FN1
         ldx MSLOT               ; X = $Cn
-        ldy MOUSE_YLO,x         ; format Y coordinate
-        lda MOUSE_YHI,x
+        ldy MOUSE_Y_LO,x        ; format Y coordinate
+        lda MOUSE_Y_HI,x
         tax
         tya
         ldy #$0C                ; digit position for Y
@@ -778,18 +778,18 @@ B5_C8:  pla                     ; sign/separator
 ;           configured by the WRITE_FIRST_BYTE that began this command sequence.
 ; ==================================================================
 B6_FN2: lda MOUSE_MODE,x        ; ReadMouse
-        and #MOUSE_ENABLED      ; is mouse on (mode bit 0)?
+        and #MOUSE_ON           ; is mouse on (mode bit 0)?
         beq B6_INACTIVE
         lda #CMD_READMOUSE
         jsr WRITE_FIRST_BYTE    ; configure Port B + send CMD_READMOUSE
         jsr READ_MCU_BYTE       ; read the 5-byte response into the screen holes
-        sta MOUSE_XLO,x
+        sta MOUSE_X_LO,x
         jsr READ_MCU_BYTE
-        sta MOUSE_XHI,x
+        sta MOUSE_X_HI,x
         jsr READ_MCU_BYTE
-        sta MOUSE_YLO,x
+        sta MOUSE_Y_LO,x
         jsr READ_MCU_BYTE
-        sta MOUSE_YHI,x
+        sta MOUSE_Y_HI,x
         jsr READ_MCU_BYTE
         sta MOUSE_STATUS,x
 B6_INACTIVE:
@@ -823,13 +823,13 @@ B7_18:  lda CLAMP_MAX_HI        ; push clamping bounds
         pha
         lda CLAMP_MIN_LO
         bcs B7_38               ; always (carry set from the cmp above)
-B7_29:  lda MOUSE_YHI,x         ; push mouse coords
+B7_29:  lda MOUSE_Y_HI,x        ; push mouse coords
         pha
-        lda MOUSE_YLO,x
+        lda MOUSE_Y_LO,x
         pha
-        lda MOUSE_XHI,x
+        lda MOUSE_X_HI,x
         pha
-        lda MOUSE_XLO,x
+        lda MOUSE_X_LO,x
 B7_38:  pha                     ; last data byte
         lda MOUSE_CMD,x
         pha                     ; command byte

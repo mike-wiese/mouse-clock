@@ -1,7 +1,7 @@
 ; ============================================================================
 ; AppleMouse II + ThunderClock Plus combined card ROM
 ; Mike Wiese
-; 2026-07-03
+; 2026-07-10
 ; ============================================================================
 ;
 ; A single de-banked ($C800 Thunderclock-style) ROM image that answers to BOTH
@@ -52,15 +52,15 @@ CLAMP_MIN_HI    = $0578
 CLAMP_MAX_HI    = $05F8
 
 ; ---- mouse view (address,X where X = slot $Cn) ----
-MOUSE_XLO       = $0478-$C0
-MOUSE_YLO       = $04F8-$C0
-MOUSE_XHI       = $0578-$C0
-MOUSE_YHI       = $05F8-$C0
+MOUSE_X_LO      = $0478-$C0
+MOUSE_Y_LO      = $04F8-$C0
+MOUSE_X_HI      = $0578-$C0
+MOUSE_Y_HI      = $05F8-$C0
 MOUSE_CMD       = $06F8-$C0
 MOUSE_STATUS    = $0778-$C0
 MOUSE_MODE      = $07F8-$C0
 
-MOUSE_ENABLED   = %00000001     ; mouse mode bit 0 mask: mouse is on, aka active
+MOUSE_ON        = %00000001     ; mouse mode bit 0 mask: mouse is on, aka active
 
 ; ---- clock view (address,X where X = slot $Cn) ----
 CLOCK_IRQEN1    = $0478-$C0
@@ -393,7 +393,7 @@ Exit:   rts
 PosMouse:
         lda #CMD_POSMOUSE
         bne SEND_B7             ; always ($9x != 0)
-SetVBLCnts:                     ; A = frames per IRQ
+SetVBLCnts:                     ; A = VBLs per IRQ
         pha                     ; push N (rate) -- left on the stack for B7
         lda #CMD_SETVBLCNTS
         bne SEND_B7             ; always
@@ -606,10 +606,10 @@ B3_SEND:
         cmp #CMD_CLEARMOUSE     ; ClearMouse: also zero the position screen holes
         bne B3_SUCCESS
         lda #$00
-        sta MOUSE_XHI,x
-        sta MOUSE_XLO,x
-        sta MOUSE_YHI,x
-        sta MOUSE_YLO,x
+        sta MOUSE_X_HI,x
+        sta MOUSE_X_LO,x
+        sta MOUSE_Y_HI,x
+        sta MOUSE_Y_LO,x
 B3_SUCCESS:
         clc                     ; EXIT_OK
         rts
@@ -666,7 +666,7 @@ B4_FN1:                         ; X is still $Cn from COMMON's SLOTXY
 @TO_CLOCK:
         jmp CLK_W_CHAR_SKIP     ; send char to clock
 MOUSE_OUT01:
-        and #MOUSE_ENABLED      ; only keep "mouse is on" bit
+        and #MOUSE_ON           ; only keep "mouse is on" bit
         sta MOUSE_MODE,x
         beq B4_26               ; turn mouse off using CMD_SETMOUSE with A = 0
         lda #'M'
@@ -685,42 +685,42 @@ B4_FN2: pla                     ; discard the char SAVE_STATE pushed
         jmp READ_TIME_SKIP
 MOUSE_IN2:
         lda MOUSE_MODE,x
-        and #MOUSE_ENABLED      ; is mouse on (mode bit 0)?
+        and #MOUSE_ON           ; is mouse on (mode bit 0)?
         bne B4_54
 ; bne not taken: A = 0 so we can comment out next line
 ;    lda #$00                   ; off: zero the position screen holes (frame kept)
-        sta MOUSE_XLO,x
-        sta MOUSE_XHI,x
-        sta MOUSE_YLO,x
-        sta MOUSE_YHI,x
+        sta MOUSE_X_LO,x
+        sta MOUSE_X_HI,x
+        sta MOUSE_Y_LO,x
+        sta MOUSE_Y_HI,x
         lda #$C0                ; button down / was down (mouse off case)
         sta MOUSE_STATUS,x
         bne B5_FN0              ; always
 B4_54:  lda #CMD_READMOUSE      ; send CMD_READMOUSE to the MCU
         jsr WRITE_FIRST_BYTE
         jsr READ_MCU_BYTE       ; read the 5-byte response into the screen holes (frame kept)
-        sta MOUSE_XLO,x
+        sta MOUSE_X_LO,x
         jsr READ_MCU_BYTE
-        sta MOUSE_XHI,x
+        sta MOUSE_X_HI,x
         jsr READ_MCU_BYTE
-        sta MOUSE_YLO,x
+        sta MOUSE_Y_LO,x
         jsr READ_MCU_BYTE
-        sta MOUSE_YHI,x
+        sta MOUSE_Y_HI,x
         jsr READ_MCU_BYTE
         sta MOUSE_STATUS,x
 
 ; ==================================================================
 ; B5: MC_IN -- format "+xxxxx,+yyyyy,+st" into INBUF
 ; ==================================================================
-B5_FN0: ldy MOUSE_XLO,x         ; format X coordinate
-        lda MOUSE_XHI,x
+B5_FN0: ldy MOUSE_X_LO,x        ; format X coordinate
+        lda MOUSE_X_HI,x
         tax
         tya
         ldy #$05                ; digit position in INBUF for X
         jsr B5_FN1
         ldx MSLOT               ; X = $Cn
-        ldy MOUSE_YLO,x         ; format Y coordinate
-        lda MOUSE_YHI,x
+        ldy MOUSE_Y_LO,x        ; format Y coordinate
+        lda MOUSE_Y_HI,x
         tax
         tya
         ldy #$0C                ; digit position for Y
@@ -834,18 +834,18 @@ B5_C8:  pla                     ; sign/separator
 ; B6: ReadMouse and single-byte MCU read
 ; ==================================================================
 B6_FN2: lda MOUSE_MODE,x        ; ReadMouse
-        and #MOUSE_ENABLED      ; is mouse on (mode bit 0)?
+        and #MOUSE_ON           ; is mouse on (mode bit 0)?
         beq B6_INACTIVE
         lda #CMD_READMOUSE
         jsr WRITE_FIRST_BYTE        ; configure Port B + send CMD_READMOUSE
         jsr READ_MCU_BYTE       ; read the 5-byte response into the screen holes
-        sta MOUSE_XLO,x
+        sta MOUSE_X_LO,x
         jsr READ_MCU_BYTE
-        sta MOUSE_XHI,x
+        sta MOUSE_X_HI,x
         jsr READ_MCU_BYTE
-        sta MOUSE_YLO,x
+        sta MOUSE_Y_LO,x
         jsr READ_MCU_BYTE
-        sta MOUSE_YHI,x
+        sta MOUSE_Y_HI,x
         jsr READ_MCU_BYTE
         sta MOUSE_STATUS,x
 B6_INACTIVE:
@@ -878,13 +878,13 @@ B7_18:  lda CLAMP_MAX_HI        ; push clamping bounds
         pha
         lda CLAMP_MIN_LO
         bcs B7_38               ; always (carry set from the cmp above)
-B7_29:  lda MOUSE_YHI,x         ; push mouse coords
+B7_29:  lda MOUSE_Y_HI,x        ; push mouse coords
         pha
-        lda MOUSE_YLO,x
+        lda MOUSE_Y_LO,x
         pha
-        lda MOUSE_XHI,x
+        lda MOUSE_X_HI,x
         pha
-        lda MOUSE_XLO,x
+        lda MOUSE_X_LO,x
 B7_38:  pha                     ; last data byte
         lda MOUSE_CMD,x
         pha                     ; command byte
@@ -1456,7 +1456,7 @@ LATEST_YEAR_TABLE:
 
 Credits:
         .byte $CD,$EF,$F5,$F3,$E5,$C3,$EC,$EF,$E3,$EB,$8D  ; "MouseClock",CR
-        .byte $B2,$B0,$B2,$B6,$AD,$B0,$B7,$AD,$B0,$B3,$8D  ; "2026-07-03",CR
+        .byte $B2,$B0,$B2,$B6,$AD,$B0,$B7,$AD,$B1,$B0,$8D  ; "2026-07-10",CR
 CreditsEnd:
 CRED_LEN = CreditsEnd - Credits
         .res  $CFFF - *, $FF

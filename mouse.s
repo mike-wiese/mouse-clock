@@ -1,7 +1,7 @@
 ; ============================================================
 ; Apple II Mouse Interface Card ROM  341-0270-c.4b
 ; Disassembly by Mike Wiese
-; 2026-07-07
+; 2026-07-10
 ; ============================================================
 ;
 ; How the card works
@@ -32,10 +32,10 @@ CLAMP_MIN_HI    = $0578         ; hi byte of clamping minimum
 CLAMP_MAX_HI    = $05F8         ; hi byte of clamping maximum
 
 ; Slot #n screen holes at address,X where X = slot $Cn
-MOUSE_XLO       = $0478-$C0     ; + $Cn   X coord lo
-MOUSE_YLO       = $04F8-$C0     ; + $Cn   Y coord lo
-MOUSE_XHI       = $0578-$C0     ; + $Cn   X coord hi
-MOUSE_YHI       = $05F8-$C0     ; + $Cn   Y coord hi
+MOUSE_X_LO      = $0478-$C0     ; + $Cn   X coord lo
+MOUSE_Y_LO      = $04F8-$C0     ; + $Cn   Y coord lo
+MOUSE_X_HI      = $0578-$C0     ; + $Cn   X coord hi
+MOUSE_Y_HI      = $05F8-$C0     ; + $Cn   Y coord hi
 ROM_BANK        = $0678-$C0     ; + $Cn   bank select
 MOUSE_CMD       = $06F8-$C0     ; + $Cn   command/temp byte
 MOUSE_STATUS    = $0778-$C0     ; + $Cn   status byte
@@ -61,7 +61,7 @@ MOUSE_MODE      = $07F8-$C0     ; + $Cn   mode byte
 ;   bit 1  Interrupt if mouse is moved
 ;   bit 0  Mouse is off (0) or on (1)
 
-MOUSE_ENABLED   = %00000001     ; mouse mode bit 0 mask: mouse is on, aka active
+MOUSE_ON        = %00000001     ; mouse mode bit 0 mask: mouse is on, aka active
 
 ; ============================================================
 ; ROM layout
@@ -355,7 +355,7 @@ DiagMouse:
 ;    0   VBL rate select: 0 = 60 Hz, 1 = 50 Hz    0
 ;    1   add $FC8E to MCU timer SEED              0
 ;    2   add signed 16-bit delta to SEED          2    CLAMP_MIN_LO (lo), CLAMP_MAX_LO (hi)
-;    3   set FRAMES_PER_IRQ (fire IRQ every N)    1    CLAMP_MIN_HI
+;    3   set VBLS_PER_IRQ (fire IRQ every N)      1    CLAMP_MIN_HI
 ;
 ; Bit 0 is documented in Mouse TN #2 "Set VBL Interrupt Rate"), the
 ; rest are not documented.
@@ -426,7 +426,7 @@ B0_98:  pha
 ; ==================================================================
 ; ReadMouse
 ; Reads the current mouse X-Y position and status into
-; MOUSE_XLO, MOUSE_XHI, MOUSE_YLO, MOUSE_YHI, and MOUSE_STATUS.
+; MOUSE_X_LO, MOUSE_X_HI, MOUSE_Y_LO, MOUSE_Y_HI, and MOUSE_STATUS.
 ; Clears VBL, button, and movement interrupt bits 1-3 in MOUSE_STATUS.
 ;
 ; Entry: X = $Cn, Y = $n0
@@ -479,7 +479,7 @@ InitMouse:
 ; ==================================================================
 ; PosMouse
 ; Sets the mouse coordinates to new values.
-; Entry: MOUSE_XLO/XHI and MOUSE_YLO/YHI contain new X and Y positions
+; Entry: MOUSE_X_LO/X_HI and MOUSE_Y_LO/Y_HI contain new X and Y positions
 ;        X = $Cn, Y = $n0
 ; Exit:  C=0
 ; ==================================================================
@@ -524,8 +524,8 @@ HomeMouse:
         bne B0_A6               ; always
 ; ==================================================================
 ; SetVBLCnts *
-; Set the mouse interrupt to fire once every N frames.
-; Entry: A = frames per IRQ (N)
+; Set the mouse interrupt to fire once every N VBLs.
+; Entry: A = VBLs per IRQ (N)
 ;        X = $Cn, Y = $n0
 ; Exit:  C=0
 ; ==================================================================
@@ -548,7 +548,7 @@ OptMouse:
         bne B0_A6               ; always
 ; ==================================================================
 ; StartTimer *
-; Acknowledges a mouse interrupt and ought to restart the frame timer,
+; Acknowledges a mouse interrupt and ought to restart the VBL timer,
 ; but due to a bug it only sets the low 8 bits of the timer, i.e. this
 ; routine is broken.
 ; Entry: X = $Cn, Y = $n0
@@ -736,7 +736,7 @@ B2_12:  lda #<B2_1F-1           ; lo byte for the RTS jump
 ; B2_1F: RTS jump target
 ; VBL sync, then reset the MCU timer to phase-lock to it.
 ; The MCU's periodic VBL interrupt is driven by its own free-running
-; frame timer. To keep the timer aligned with the real video VBL,
+; VBL timer. To keep the timer aligned with the real video VBL,
 ; InitMouse synchronizes to a VBL edge and then sends CMD_INITMOUSE,
 ; which restarts the MCU timer.
 ; Two sync methods, by machine:
@@ -757,7 +757,7 @@ B2_30:  lda RDVBLBAR
         bne B2_39               ; always; branch to B2_39; returns to B2_80
 B2_39:  pha                     ; push A (= RTS jump lo byte: $11, $7F, or $E3)
         lda #$50                ; the MCU is waiting for us to send a byte (the value is ignored),
-                                ; once received the MCU restarts its frame timer; after a
+                                ; once received the MCU restarts its VBL timer; after a
                                 ; VBL sync this phase-locks the mouse VBL to the Apple II VBL
         pha
         lda #BANK6
@@ -833,7 +833,7 @@ B2_89:  bne B2_39               ; always (entered with A=$E3 from B2_D7)
 ; sentinels are on EVEN bytes, so from an odd-phase start the first check will
 ; never land on either sentinel.
 ;
-; So how does it work, even though 44 is not relatively prime to the frame length?
+; So how does it work, even though 44 is not relatively prime to the video frame length?
 ;     gcd(44,17030) = 2 @ 60 Hz, gcd(44,20280) = 4 @ 50 Hz
 ;
 ; Two things rescue it:
@@ -855,7 +855,7 @@ B2_89:  bne B2_39               ; always (entered with A=$E3 from B2_D7)
 ; blanking double scan. That takes the 61-cycle odd detour, flipping the loop to
 ; even phase, and it then matches both sentinels on the last visible line and
 ; locks. The loop therefore syncs from any starting phase (though it can take
-; many frames to happen).
+; many VBLs to happen).
 ; ------------------------------------------------------------------
 B2_8B:  lda #$01
         sta LINE191             ; first sentinel byte at the start of the last line ...
@@ -965,10 +965,10 @@ B3_WAIT_WRITE_ACK:
         cmp #CMD_CLEARMOUSE     ; is it ClearMouse ?
         bne B3_SUCCESS          ; no: return to bank 0
         lda #$00                ; yes: set screen hole mouse coords to (0,0)
-        sta MOUSE_XHI,x
-        sta MOUSE_XLO,x
-        sta MOUSE_YHI,x
-        sta MOUSE_YLO,x
+        sta MOUSE_X_HI,x
+        sta MOUSE_X_LO,x
+        sta MOUSE_Y_HI,x
+        sta MOUSE_Y_LO,x
         beq B3_SUCCESS          ; always
         .res  23, $FF
 B3_BANK_SWITCH:
@@ -1042,7 +1042,7 @@ B4_FN0: cpx CSWH                ; is CSWH pointing to our slot?
 B4_FN1: pla                     ; pop character
         cmp #$8D                ; CR ?
         beq B4_85               ; yes -> exit
-        and #MOUSE_ENABLED      ; only keep "mouse is on" bit 0
+        and #MOUSE_ON           ; only keep "mouse is on" bit 0
         ora #BANK4<<4           ; upper nibble = BANK4
         sta MOUSE_MODE,x
         txa                     ; A = $Cn
@@ -1066,20 +1066,20 @@ B4_31:  cpx KSWH                ; is KSWH pointing to our slot?
         lda #<MOUSE_IN
         sta KSWL                ; install MOUSE_IN hook, fall thru to handle character
 B4_FN2: lda MOUSE_MODE,x
-        and #MOUSE_ENABLED      ; is mouse on (mode bit 0) ?
+        and #MOUSE_ON           ; is mouse on (mode bit 0) ?
         bne B4_54               ; yes: continue to read and format mouse info
         pla                     ; no: discard 4 of 5 registers saved in MAIN, leaving the flags
         pla
         pla
         pla
         lda #$00                ; set screen hole mouse coords to (0,0)
-        sta MOUSE_XLO,x
-        sta MOUSE_XHI,x
-        sta MOUSE_YLO,x
-        sta MOUSE_YHI,x
+        sta MOUSE_X_LO,x
+        sta MOUSE_X_HI,x
+        sta MOUSE_Y_LO,x
+        sta MOUSE_Y_HI,x
         beq B4_90               ; always
 B4_54:  lda MOUSE_MODE,x
-        and #MOUSE_ENABLED      ; only keep "mouse is on" bit 0
+        and #MOUSE_ON           ; only keep "mouse is on" bit 0
         ora #BANK4<<4           ; upper nibble = BANK4: B6_51 will route back here
         sta MOUSE_MODE,x
         txa                     ; A = $Cn
@@ -1165,13 +1165,13 @@ B4_WAIT_READ_REQ_CLR:
         pla
         sta MOUSE_STATUS,x
         pla
-        sta MOUSE_YHI,x
+        sta MOUSE_Y_HI,x
         pla
-        sta MOUSE_YLO,x
+        sta MOUSE_Y_LO,x
         pla
-        sta MOUSE_XHI,x
+        sta MOUSE_X_HI,x
         pla
-        sta MOUSE_XLO,x
+        sta MOUSE_X_LO,x
         clc
         bcc B4_TO_B5            ; always
         .res  3, $FF
@@ -1189,8 +1189,8 @@ B5_FN0: txa                     ; A = $Cn
         pha
         lda #<B5_13-1           ; lo byte for the RTS jump
         pha
-        ldy MOUSE_XLO,x         ; Y = X coord lo byte
-        lda MOUSE_XHI,x         ; A = X coord hi byte
+        ldy MOUSE_X_LO,x        ; Y = X coord lo byte
+        lda MOUSE_X_HI,x        ; A = X coord hi byte
         tax                     ; X = X coord hi byte (sign check in B5_FN1)
         tya                     ; A = X coord lo byte
         ldy #$05                ; Y = 5: starting digit position in INBUF for X coord
@@ -1202,8 +1202,8 @@ B5_FN0: txa                     ; A = $Cn
 B5_13:  ldx MSLOT               ; X = $Cn
         lda #<B5_25-1           ; lo byte for the RTS jump
         pha
-        ldy MOUSE_YLO,x         ; Y = Y coord lo byte
-        lda MOUSE_YHI,x         ; A = Y coord hi byte
+        ldy MOUSE_Y_LO,x        ; Y = Y coord lo byte
+        lda MOUSE_Y_HI,x        ; A = Y coord hi byte
         tax
         tya                     ; A = Y coord lo byte
         ldy #$0C                ; Y = 12: digit position for Y coord in INBUF
@@ -1311,14 +1311,14 @@ B5_CC:  rts
 ;   code=0 (B6_FN0): send first byte (already on the stack) to the MCU;
 ;   code=1 (B6_FN1): read a single byte from the MCU
 ;   code=2 (B6_FN2): ReadMouse: if mouse is on, send CMD_READMOUSE and read 5
-;                    bytes (XLO,XHI,YLO,YHI,STATUS) into the screen holes
+;                    bytes (X_LO,X_HI,Y_LO,Y_HI,STATUS) into the screen holes
 ; ==================================================================
         .org $0600
 
 B6_FN0: clv                     ; clear V: send byte, no response
         bvc B6_SEND_BYTE        ; always
 B6_FN2: lda MOUSE_MODE,x        ; is mouse on (mode bit 0)?
-        and #MOUSE_ENABLED
+        and #MOUSE_ON
         beq B6_51               ; no: switch to bank 0 and return
         lda #CMD_READMOUSE
         pha                     ; push MCU command
@@ -1411,13 +1411,13 @@ B6_WAIT_READ_REQ_CLR:
         pla                     ; all bytes received: pop them from stack into screen holes
         sta MOUSE_STATUS,x
         pla
-        sta MOUSE_YHI,x
+        sta MOUSE_Y_HI,x
         pla
-        sta MOUSE_YLO,x
+        sta MOUSE_Y_LO,x
         pla
-        sta MOUSE_XHI,x
+        sta MOUSE_X_HI,x
         pla
-        sta MOUSE_XLO,x
+        sta MOUSE_X_LO,x
 DONE_READING:
         lda #BANK0
         beq TO_B6_48            ; always
@@ -1454,14 +1454,14 @@ B7_18:  lda CLAMP_MAX_HI        ; push clamping bounds
         pha
         lda CLAMP_MIN_LO
         bcs B7_38               ; always; carry set from cmp above
-B7_29:  lda MOUSE_YHI,x         ; push mouse coords
+B7_29:  lda MOUSE_Y_HI,x        ; push mouse coords
         pha
-        lda MOUSE_YLO,x
+        lda MOUSE_Y_LO,x
         pha
-        lda MOUSE_XHI,x
+        lda MOUSE_X_HI,x
         pha
-        lda MOUSE_XLO,x
-B7_38:  pha                     ; push last data byte (CLAMP_MIN_LO or MOUSE_XLO)
+        lda MOUSE_X_LO,x
+B7_38:  pha                     ; push last data byte (CLAMP_MIN_LO or MOUSE_X_LO)
         lda MOUSE_CMD,x
         pha
         lda #$05                ; send 5 bytes: command + 4 data bytes
