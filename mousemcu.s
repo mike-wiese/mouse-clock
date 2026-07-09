@@ -23,13 +23,19 @@ DDRC            = $06   ; Port C Data Direction Register ($0C: PC2,PC3=output)
 TIMER           = $08   ; Timer Data Register (free-running, decrements)
 TCR             = $09   ; Timer Control Register
 
-; Port C handshake protocol:
-;   PC0 in  — Apple II asserts to ACK data received from MCU
-;   PC1 in  — Apple II asserts when sending command/data to MCU
-;   PC2 out — MCU asserts when data ready for Apple II
-;   PC3 out — MCU asserts to ACK receipt of Apple II data
-;
-; Port B:
+; Timer Control Register bits
+TIR             = 7     ; Timer Interrupt Request
+TIM             = 6     ; Timer Interrupt Mask, 1 = inhibit timer interrupts
+
+; MCU Port C bits
+; Port C bits 0-3 are connected to PIA Port B bits 4-7
+READ_ACK        = 0     ; MCU PC0 in  <- PIA PB4 out  Apple II asserts to ACK data from MCU
+WRITE_REQ       = 1     ; MCU PC1 in  <- PIA PB5 out  Apple II asserts when data is ready for MCU
+READ_REQ        = 2     ; MCU PC2 out -> PIA PB6 in   MCU asserts when data is ready for Apple II
+WRITE_ACK       = 3     ; MCU PC3 out -> PIA PB7 in   MCU asserts to ACK data from Apple II
+
+; MCU Port B bits
+A2IRQ           = 6     ; MCU PB6 out -> Apple II /IRQ, active low
 ;   PB6 out — Apple II IRQ (active low; initialized high = deasserted)
 ;   PB0-PB3 in — quadrature encoder inputs:
 ;       PB1 = X0 (direct)         PB3 = Y1 (direct)        <- clock / trigger lines
@@ -77,6 +83,16 @@ DIAG_ADDR_HI    = $5F
 DIAG_ADDR_LO    = $60
 DIAG_ARG        = $61
 
+; MOUSE_MODE bits
+MODE_ENABLED    = 0     ; enable mouse movement decoding
+MODE_MOVED_IRQ  = 1     ; enable mouse moved interrupts
+MODE_BUTTON_IRQ = 2     ; enable button down interrupts
+MODE_VBL_IRQ    = 3     ; enable VBL interrupts
+
+; MOUSE_OPTIONS bits
+OPT_HALF_RES    = 0     ; count clock rising edges only (IIc-style)
+OPT_CLEAR_ON_READ = 1   ; zero position after CMD_READMOUSE
+
 ; -- MCU Commands (Apple II -> MCU, high nibble selects command) -
 ; Bytes exchanged after the 1-byte command
 ; (params = Apple II -> MCU, result = MCU -> Apple II):
@@ -113,21 +129,21 @@ DIAG_ARG        = $61
 ; ------------------------------------------------------------
 
 RECV_BYTE:
-        $0080  03 02 FD       brclr 1, PORTC,*              ; wait: Apple II asserts PC1 (data ready)
+        $0080  03 02 FD       brclr WRITE_REQ, PORTC,*      ; wait: Apple II asserts PC1 (data ready)
 
 RECV_BYTE_skip:
         $0083  B6 00          lda PORTA                     ; read byte from Port A
-        $0085  16 02          bset 3, PORTC                 ; assert PC3 (MCU ack)
-        $0087  02 02 FD       brset 1, PORTC,*              ; wait: Apple II de-asserts PC1
-        $008A  17 02          bclr 3, PORTC                 ; clear PC3
+        $0085  16 02          bset WRITE_ACK, PORTC         ; assert PC3 (MCU ack)
+        $0087  02 02 FD       brset WRITE_REQ, PORTC,*      ; wait: Apple II de-asserts PC1
+        $008A  17 02          bclr WRITE_ACK, PORTC         ; clear PC3
         $008C  81             rts
 
 SEND_BYTE:
-        $008D  00 02 FD       brset 0, PORTC,*              ; wait: PC0 de-asserted (Apple II ready)
+        $008D  00 02 FD       brset READ_ACK, PORTC,*       ; wait: PC0 de-asserted (Apple II ready)
         $0090  B7 00          sta PORTA                     ; put byte on Port A
-        $0092  14 02          bset 2, PORTC                 ; assert PC2 (MCU: data ready)
-        $0094  01 02 FD       brclr 0, PORTC,*              ; wait: Apple II asserts PC0 (ACK)
-        $0097  15 02          bclr 2, PORTC                 ; clear PC2
+        $0092  14 02          bset READ_REQ, PORTC          ; assert PC2 (MCU: data ready)
+        $0094  01 02 FD       brclr READ_ACK, PORTC,*       ; wait: Apple II asserts PC0 (ACK)
+        $0097  15 02          bclr READ_REQ, PORTC          ; clear PC2
         $0099  81             rts
 
 ; ------------------------------------------------------------
@@ -209,7 +225,7 @@ RESET:
 ; ------------------------------------------------------------
 
 CMD_LOOP:
-        $03F3  03 02 0D       brclr 1, PORTC,STATE_CHECK    ; wait for Apple II to assert PC1 (command ready)
+        $03F3  03 02 0D       brclr WRITE_REQ, PORTC,STATE_CHECK    ; wait for Apple II to assert PC1 (command ready)
         $03F6  CD 00 83       jsr RECV_BYTE_skip            ; receive command byte (skip wait, PC1 already set)
         $03F9  B7 59          sta CMD_BYTE                  ; save command byte
         $03FB  44             lsra                          ; decode: (cmd >> 2) & $3C -> X = table index
@@ -228,11 +244,11 @@ STATE_CHECK:
         $0405  A4 0F          and #$0F                      ; keep low nibble (quadrature bits)
         $0407  B8 44          eor QUAD_STATE                ; XOR with saved state: non-zero = state changed
         $0409  27 E8          beq CMD_LOOP                  ; no change: wait for next command
-        $040B  01 58 5B       brclr 0, MOUSE_MODE,$0469     ; mouse off (mode bit 0 = 0) -> skip decode
+        $040B  01 58 5B       brclr MODE_ENABLED, MOUSE_MODE, $0469 ; mouse off (mode bit 0 = 0) -> skip decode
         $040E  B7 45          sta QUAD_CHANGED              ; save XOR diff = changed bits
         $0410  B8 44          eor QUAD_STATE                ; A = diff XOR old = new state
         $0412  B7 44          sta QUAD_STATE                ; update saved state
-        $0414  01 5D 08       brclr 0, MOUSE_OPTIONS,$041F  ; bit 0 clear? -> keep both edges (full res)
+        $0414  01 5D 08       brclr OPT_HALF_RES, MOUSE_OPTIONS, $041F  ; bit 0 clear? -> keep both edges (full res)
                                                             ;   set? fall through to rising-edge-only filter:
         $0417  A4 0A          and #$0A                      ; A = new level & clock mask (X0=PB1, Y1=PB3)
         $0419  B4 45          and QUAD_CHANGED              ; & changed bits -> clock bits high AND changed
@@ -300,29 +316,29 @@ CMD_READMOUSE:
         $0473  A6 FF          lda #$FF
         $0475  B7 04          sta DDRA
         $0477  B6 42          lda XLO
-        $0479  00 02 FD       brset 0, PORTC,*
+        $0479  00 02 FD       brset READ_ACK, PORTC,*
         $047C  B7 00          sta PORTA
-        $047E  14 02          bset 2, PORTC
-        $0480  01 02 FD       brclr 0, PORTC,*
-        $0483  15 02          bclr 2, PORTC
+        $047E  14 02          bset READ_REQ, PORTC
+        $0480  01 02 FD       brclr READ_ACK, PORTC,*
+        $0483  15 02          bclr READ_REQ, PORTC
         $0485  B6 40          lda XHI
-        $0487  00 02 FD       brset 0, PORTC,*
+        $0487  00 02 FD       brset READ_ACK, PORTC,*
         $048A  B7 00          sta PORTA
-        $048C  14 02          bset 2, PORTC
-        $048E  01 02 FD       brclr 0, PORTC,*
-        $0491  15 02          bclr 2, PORTC
+        $048C  14 02          bset READ_REQ, PORTC
+        $048E  01 02 FD       brclr READ_ACK, PORTC,*
+        $0491  15 02          bclr READ_REQ, PORTC
         $0493  B6 43          lda YLO
-        $0495  00 02 FD       brset 0, PORTC,*
+        $0495  00 02 FD       brset READ_ACK, PORTC,*
         $0498  B7 00          sta PORTA
-        $049A  14 02          bset 2, PORTC
-        $049C  01 02 FD       brclr 0, PORTC,*
-        $049F  15 02          bclr 2, PORTC
+        $049A  14 02          bset READ_REQ, PORTC
+        $049C  01 02 FD       brclr READ_ACK, PORTC,*
+        $049F  15 02          bclr READ_REQ, PORTC
         $04A1  B6 41          lda YHI
-        $04A3  00 02 FD       brset 0, PORTC,*
+        $04A3  00 02 FD       brset READ_ACK, PORTC,*
         $04A6  B7 00          sta PORTA
-        $04A8  14 02          bset 2, PORTC
-        $04AA  01 02 FD       brclr 0, PORTC,*
-        $04AD  15 02          bclr 2, PORTC
+        $04A8  14 02          bset READ_REQ, PORTC
+        $04AA  01 02 FD       brclr READ_ACK, PORTC,*
+        $04AD  15 02          bclr READ_REQ, PORTC
         $04AF  B6 01          lda PORTB
         $04B1  A8 80          eor #$80                      ; button is active low, invert
         $04B3  48             lsla
@@ -330,15 +346,15 @@ CMD_READMOUSE:
         $04B6  B6 46          lda BUTTON_STATE
         $04B8  A4 C0          and #$C0
         $04BA  BA 5A          ora MOVED_SINCE_READ
-        $04BC  00 02 FD       brset 0, PORTC,*
+        $04BC  00 02 FD       brset READ_ACK, PORTC,*
         $04BF  B7 00          sta PORTA
-        $04C1  14 02          bset 2, PORTC
-        $04C3  01 02 FD       brclr 0, PORTC,*
-        $04C6  15 02          bclr 2, PORTC
+        $04C1  14 02          bset READ_REQ, PORTC
+        $04C3  01 02 FD       brclr READ_ACK, PORTC,*
+        $04C6  15 02          bclr READ_REQ, PORTC
         $04C8  A6 00          lda #$00
         $04CA  B7 5A          sta MOVED_SINCE_READ
         $04CC  B7 04          sta DDRA
-        $04CE  03 5D 08       brclr 1, MOUSE_OPTIONS,$04D9  ; bit 1 set? -> zero XHI/XLO/YHI/YLO
+        $04CE  03 5D 08       brclr OPT_CLEAR_ON_READ, MOUSE_OPTIONS, $04D9 ; bit 1 set? -> zero XHI/XLO/YHI/YLO
         $04D1  B7 40          sta XHI
         $04D3  B7 42          sta XLO
         $04D5  B7 41          sta YHI
@@ -350,15 +366,15 @@ CMD_READMOUSE:
 ; ------------------------------------------------------------
 
 CMD_SERVEMOUSE:
-        $04DC  1C 01          bset 6, PORTB
+        $04DC  1C 01          bset A2IRQ, PORTB             ; clear Apple II /IRQ
         $04DE  A6 FF          lda #$FF
         $04E0  B7 04          sta DDRA
         $04E2  B6 5C          lda IRQ_SOURCES
-        $04E4  00 02 FD       brset 0, PORTC,*
+        $04E4  00 02 FD       brset READ_ACK, PORTC,*
         $04E7  B7 00          sta PORTA
-        $04E9  14 02          bset 2, PORTC
-        $04EB  01 02 FD       brclr 0, PORTC,*
-        $04EE  15 02          bclr 2, PORTC
+        $04E9  14 02          bset READ_REQ, PORTC
+        $04EB  01 02 FD       brclr READ_ACK, PORTC,*
+        $04EE  15 02          bclr READ_REQ, PORTC
         $04F0  A6 00          lda #$00
         $04F2  B7 5C          sta IRQ_SOURCES
         $04F4  B7 04          sta DDRA
@@ -427,7 +443,7 @@ CMD_POSMOUSE:
 
 CMD_INITMOUSE:
         $0547  9B             sei
-        $0548  1D 09          bclr 6, TCR
+        $0548  1D 09          bclr TIM, TCR                 ; enable timer interrupts
         $054A  B6 57          lda FRAMES_PER_IRQ
         $054C  B7 56          sta FRAME_COUNTER
         $054E  B6 53          lda SEED_HI
@@ -436,12 +452,12 @@ CMD_INITMOUSE:
         $0553  A6 00          lda #$00
         $0555  B7 5B          sta MOVED_SINCE_VBL
         $0557  B7 5C          sta IRQ_SOURCES
-        $0559  1C 01          bset 6, PORTB
+        $0559  1C 01          bset A2IRQ, PORTB             ; clear Apple II /IRQ
         $055B  CD 00 8D       jsr SEND_BYTE
-        $055E  03 02 FD       brclr 1, PORTC,*
+        $055E  03 02 FD       brclr WRITE_REQ, PORTC,*
         $0561  A6 FF          lda #$FF
         $0563  B7 08          sta TIMER
-        $0565  1F 09          bclr 7, TCR
+        $0565  1F 09          bclr TIR, TCR                 ; clear any pending timer interrupt
         $0567  9A             cli
         $0568  B6 52          lda SEED_LO
         $056A  B7 08          sta TIMER
@@ -512,7 +528,7 @@ CMD_TRANSPARENT:
 ; ------------------------------------------------------------
 
 CMD_TIMEDATA:
-        $05B0  1C 09          bset 6, TCR
+        $05B0  1C 09          bset TIM, TCR                 ; inhibit timer interrupts
         $05B2  B6 59          lda CMD_BYTE
         $05B4  A4 01          and #$01
         $05B6  97             tax
@@ -589,11 +605,11 @@ CMD_OPTMOUSE:
 
 CMD_STARTTIMER:
         $0626  9B             sei
-        $0627  1D 09          bclr 6, TCR
+        $0627  1D 09          bclr TIM, TCR                 ; enable timer interrupts
         $0629  A6 00          lda #$00
         $062B  B7 5B          sta MOVED_SINCE_VBL
         $062D  B7 5C          sta IRQ_SOURCES
-        $062F  1C 01          bset 6, PORTB
+        $062F  1C 01          bset A2IRQ, PORTB             ; clear Apple II /IRQ
         $0631  B6 57          lda FRAMES_PER_IRQ
         $0633  B7 56          sta FRAME_COUNTER
         $0635  B6 55          lda SEED_DELTA_HI
@@ -601,7 +617,7 @@ CMD_STARTTIMER:
         $0638  B7 08          sta TIMER                     ; /!\ bug, should be TIMER_HI
         $063A  A6 FF          lda #$FF
         $063C  B7 08          sta TIMER
-        $063E  1F 09          bclr 7, TCR
+        $063E  1F 09          bclr TIR, TCR                 ; clear any pending timer interrupt
         $0640  9A             cli
         $0641  B6 54          lda SEED_DELTA_LO
         $0643  B7 08          sta TIMER
@@ -652,7 +668,7 @@ CMD_NOP:
 
 
 TIMER_ISR:
-        $067D  1F 09          bclr 7, TCR                   ; clear TIR (timer interrupt request, bit 7)
+        $067D  1F 09          bclr TIR, TCR                 ; clear timer interrupt
         $067F  3A 4F          dec TIMER_HI                  ; count down one 256-tick chunk
 
         ; The check for zero happens AFTER the dec above, so the reload fires
@@ -710,7 +726,7 @@ TIMER_ISR:
         $06AF  20 00          bra $06B1                     ; (branch to next instr, 2-byte NOP)
         $06B1  B4 58          and MOUSE_MODE                ; mask vs mode IRQ-enable bits (b1 move, b2 button, b3 VBL)
         $06B3  27 02          beq $06B7                     ; nothing enabled occurred -> no interrupt
-        $06B5  1D 01          bclr 6, PORTB                 ; assert Apple II IRQ (PB6 low, active-low)
+        $06B5  1D 01          bclr A2IRQ, PORTB             ; assert Apple II /IRQ (PB6, active-low)
         $06B7  BA 5C          ora IRQ_SOURCES               ; accumulate status into IRQ_SOURCES (sent by ServeMouse)
         $06B9  B7 5C          sta IRQ_SOURCES
         $06BB  A6 00          lda #$00                      ; clear movement flag
