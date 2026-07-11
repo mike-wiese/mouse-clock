@@ -356,7 +356,7 @@ DiagMouse:
 ;   ---  -------------------------------------  -----  -----------------------------
 ;    0   VBL rate select: 0 = 60 Hz, 1 = 50 Hz    0
 ;    1   add $FC8E to MCU timer SEED              0
-;    2   add signed 16-bit delta to SEED          2    CLAMP_MIN_LO (lo), CLAMP_MAX_LO (hi)
+;    2   set 16-bit SEED_DELTA, add it to SEED    2    CLAMP_MIN_LO (lo), CLAMP_MAX_LO (hi)
 ;    3   set VBLS_PER_IRQ (fire IRQ every N)      1    CLAMP_MIN_HI
 ;
 ; Bit 0 is documented in Mouse TN #2 "Set VBL Interrupt Rate"), the
