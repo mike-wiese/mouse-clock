@@ -1,7 +1,7 @@
 ; ============================================================
 ; Apple II Mouse Interface Card ROM  341-0270-c.4b
 ; Disassembly by Mike Wiese
-; 2026-07-10
+; 2026-07-11
 ; ============================================================
 ;
 ; How the card works
@@ -19,6 +19,10 @@
 ; position, button, and status are read back the same way. The MCU
 ; decodes the quadrature encoders and button, clamps the X/Y position,
 ; and raises VBL-synced interrupts.
+
+.include "ca65_a2_strings.inc"
+
+        .setcpu "6502"
 
 ; ============================================================
 ; Screen hole usage
@@ -236,8 +240,6 @@ BCD_LO          = $0221         ; BCD conversion: lo byte of coordinate (shift r
 SLOTX16         = $0222         ; slot# * $10 (Y value for $C08x,Y)
 MSLOT           = $07F8         ; slot $Cn
 LINE191         = $3FD0         ; HIRES page 1, line 191
-
-        .setcpu "6502"
 
 ; ==================================================================
 ; BANK 0: Entry points.
@@ -609,14 +611,9 @@ B1_1D:  pla                     ; pop saved zp bytes
         tay                     ; Y = $n0
         bne B1_TO_B0            ; always
 Credits:
-; "AppleMouse", $8D
-; "Copyright 1983 by Apple Computer, Inc.", $8D, $8D
-; "Bachman/Marks/MacKay", $8D, $00
-        .byte $C1,$F0,$F0,$EC,$E5,$CD,$EF,$F5,$F3,$E5,$8D,$C3,$EF,$F0,$F9,$F2
-        .byte $E9,$E7,$E8,$F4,$A0,$B1,$B9,$B8,$B3,$A0,$E2,$F9,$A0,$C1,$F0,$F0
-        .byte $EC,$E5,$A0,$C3,$EF,$ED,$F0,$F5,$F4,$E5,$F2,$AC,$A0,$C9,$EE,$E3
-        .byte $AE,$8D,$8D,$C2,$E1,$E3,$E8,$ED,$E1,$EE,$AF,$CD,$E1,$F2,$EB,$F3
-        .byte $AF,$CD,$E1,$E3,$CB,$E1,$F9,$8D,$00
+        str "AppleMouse", $8D
+        str "Copyright 1983 by Apple Computer, Inc.", $8D, $8D
+        str "Bachman/Marks/MacKay", $8D, $00
 B1_BANK_SWITCH:
         lda PIA_PB,y
         and #$F1                ; 1111 0001: clear bank select bits 1-3

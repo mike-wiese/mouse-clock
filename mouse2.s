@@ -1,7 +1,7 @@
 ; ============================================================
 ; Apple II Mouse Interface Card ROM  --  non-banked variant
 ; Mike Wiese
-; 2026-07-10
+; 2026-07-11
 ; ============================================================
 ;
 ; This is a de-banked re-implementation of the AppleMouse II firmware.
@@ -39,6 +39,10 @@
 ;     deselect it. IIe and later still sync via RDVBLBAR.
 ;
 ; See mouse.s for the full hardware description (PIA, MCU handshake, etc.).
+
+.include "ca65_a2_strings.inc"
+
+        .setcpu "6502"
 
 ; ============================================================
 ; Screen hole usage
@@ -132,8 +136,6 @@ INBUF           = $0200         ; GETLN input buffer
 BCD_HI          = $0220         ; BCD conversion: hi byte
 BCD_LO          = $0221         ; BCD conversion: lo byte
 MSLOT           = $07F8         ; slot $Cn
-
-        .setcpu "6502"
 
 ; ==================================================================
 ; Page 0 ($C800-$C8FF, also mapped at $Cn00):
@@ -456,14 +458,9 @@ B1_1D:  pla
         clc                     ; EXIT_OK
         rts
 Credits:
-; "AppleMouse", $8D
-; "Copyright 1983 by Apple Computer, Inc.", $8D, $8D
-; "Bachman/Marks/MacKay", $8D, $00
-        .byte $C1,$F0,$F0,$EC,$E5,$CD,$EF,$F5,$F3,$E5,$8D,$C3,$EF,$F0,$F9,$F2
-        .byte $E9,$E7,$E8,$F4,$A0,$B1,$B9,$B8,$B3,$A0,$E2,$F9,$A0,$C1,$F0,$F0
-        .byte $EC,$E5,$A0,$C3,$EF,$ED,$F0,$F5,$F4,$E5,$F2,$AC,$A0,$C9,$EE,$E3
-        .byte $AE,$8D,$8D,$C2,$E1,$E3,$E8,$ED,$E1,$EE,$AF,$CD,$E1,$F2,$EB,$F3
-        .byte $AF,$CD,$E1,$E3,$CB,$E1,$F9,$8D,$00
+        str "AppleMouse", $8D
+        str "Copyright 1983 by Apple Computer, Inc.", $8D, $8D
+        str "Bachman/Marks/MacKay", $8D, $00
 
 ; ---- DiagMouse: read/write one byte of MCU memory ----------------
 ;   CLAMP_MIN_LO -> MCU address low byte

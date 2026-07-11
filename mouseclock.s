@@ -1,7 +1,7 @@
 ; ============================================================================
 ; AppleMouse II + ThunderClock Plus combined card ROM
 ; Mike Wiese
-; 2026-07-10
+; 2026-07-11
 ; ============================================================================
 ;
 ; A single de-banked ($C800 Thunderclock-style) ROM image that answers to BOTH
@@ -42,6 +42,10 @@
 ;
 ;   4. Removed the ThunderClock BSR / X-10 support to save space.
 ; ============================================================================
+
+.include "ca65_a2_strings.inc"
+
+        .setcpu "6502"
 
 ; ============================================================
 ; Screen hole usage  (NOTE: mouse and clock uses alias the same bytes)
@@ -166,8 +170,6 @@ INBUF           = $0200
 BCD_HI          = $0220
 BCD_LO          = $0221
 MSLOT           = $07F8
-
-        .setcpu "6502"
 
 ; To be recognized as a mouse need (Mouse Technical Note #5)
 ;   $Cn05 = $38  Pascal ID byte
@@ -1455,8 +1457,8 @@ LATEST_YEAR_TABLE:
         .byte $1E               ; Jan 1 = Tuesday   -> 2030
 
 Credits:
-        .byte $CD,$EF,$F5,$F3,$E5,$C3,$EC,$EF,$E3,$EB,$8D  ; "MouseClock",CR
-        .byte $B2,$B0,$B2,$B6,$AD,$B0,$B7,$AD,$B1,$B0,$8D  ; "2026-07-10",CR
+        str "MouseClock", $8D
+        str "2026-07-11", $8D
 CreditsEnd:
 CRED_LEN = CreditsEnd - Credits
         .res  $CFFF - *, $FF
